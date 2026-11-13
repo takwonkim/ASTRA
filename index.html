@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#05080e">
+  <meta name="description" content="실제 우주에서 시작해 미지의 은하와 행성을 탐험하세요. 시간을 조절하며 나만의 항로를 만드는 3D 우주 탐사 시뮬레이터, ASTRA.">
+  <title>ASTRA — 별 너머의 세계</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+  <script type="importmap">{"imports":{"three":"./vendor/three.module.min.js","three/addons/controls/OrbitControls.js":"./vendor/OrbitControls.js"}}</script>
+</head>
+<body>
+  <main id="app">
+    <div id="viewport" aria-label="드래그로 회전하고 휠 또는 두 손가락으로 확대하는 3차원 우주"></div>
+    <div class="vignette" aria-hidden="true"></div>
+    <div id="labels" aria-label="화면의 천체"></div>
+    <header class="header">
+      <a class="brand" href="#" aria-label="ASTRA 시작 화면">
+        <svg viewBox="0 0 36 36" aria-hidden="true"><path d="M18 2 22 14 34 18 22 22 18 34 14 22 2 18 14 14Z"/><circle cx="18" cy="18" r="10"/></svg>
+        <span>ASTRA<small>별 너머의 세계</small></span>
+      </a>
+      <nav class="view-nav" aria-label="탐사 범위">
+        <button data-view="cluster"><span>01</span> 은하 지도</button>
+        <button data-view="galaxy"><span>02</span> 은하 탐사</button>
+        <button data-view="system"><span>03</span> 행성계</button>
+      </nav>
+      <div class="header-actions"><span id="live-status"><i></i>시간 진행 중</span><button id="help-button" class="icon-button" aria-label="관측 안내">?</button><button id="fullscreen-button" class="icon-button" aria-label="전체 화면">⛶</button></div>
+    </header>
+
+    <button id="drawer-button" class="drawer-button" aria-expanded="false" aria-controls="destinations">☷ 목적지</button>
+    <aside class="destinations panel" id="destinations" aria-label="탐사 목적지">
+      <div class="panel-eyebrow"><span>탐험 항로</span><span id="sector-code">구역 001</span></div>
+      <button id="up-button" class="back-button">↖ 은하 지도로</button>
+      <div class="list-heading"><h2 id="list-title">항성 목록</h2><span id="list-count"></span></div>
+      <label class="search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="m12 12 5 5"/></svg><input id="search" type="search" placeholder="이 목록에서 검색" autocomplete="off" aria-label="목적지 검색"></label>
+      <div id="destination-list" class="destination-list"></div>
+      <button id="discover-button" class="discover-button"><span>✧</span><span id="discover-label">미지의 별로 떠나기</span><span>↗</span></button>
+      <div class="sidebar-footer"><span class="real-dot"></span>실제 천체 <span class="generated-dot"></span>생성 천체</div>
+    </aside>
+
+    <section class="scene-heading" aria-label="현재 탐사 위치">
+      <p id="breadcrumb">국부은하군 / 우리 은하</p>
+      <h1 id="scene-title">우리 은하<span>.</span></h1>
+      <p id="scene-subtitle">익숙한 별에서, 아직 이름 없는 세계로.</p>
+      <div class="scene-meta"><span id="scene-count">20,000개의 별</span><span class="divider"></span><span id="scene-model">회전 모형 · 공간 재구성</span></div>
+    </section>
+
+    <aside class="object-card panel" id="object-card" aria-label="선택한 천체 정보">
+      <div class="panel-eyebrow"><span>관측 대상</span><span id="object-code">SOL</span></div>
+      <div id="object-art" class="object-art" aria-hidden="true"></div>
+      <div id="object-badge" class="object-badge real">실제 천체</div>
+      <h2 id="object-name">태양</h2>
+      <p id="object-kind">황색 주계열성</p>
+      <dl id="object-facts" class="object-facts"></dl>
+      <p id="object-description" class="object-description"></p>
+      <button id="travel-button" class="travel-button"><span>행성계 탐사</span><span>↗</span></button>
+    </aside>
+
+    <div class="interaction-hint"><span class="mouse-icon"></span><span>드래그로 회전</span><b>·</b><span>휠로 확대</span><b>·</b><span>천체를 클릭해 선택</span></div>
+    <div class="scale-note"><span id="scale-level">은하 규모</span><small>탐험을 위한 배치 · 크기 강조</small></div>
+
+    <section class="time-panel panel" aria-label="시뮬레이션 시간 조절">
+      <div class="time-top"><div><span class="time-dot"></span><span>시뮬레이션 시간</span><strong id="elapsed">기준 시점</strong></div><button id="reset-time" title="시간을 기준 시점으로 되돌리기">↺ <span>초기화</span></button></div>
+      <div class="time-controls">
+        <button id="reverse-button" class="icon-button" aria-label="시간 역재생" aria-pressed="false">↶</button>
+        <button id="pause-button" class="play-button" aria-label="시간 정지">Ⅱ</button>
+        <label class="speed-control"><span class="sr-only">시간 배속</span><input id="speed-slider" type="range" min="0" max="6" value="3"><span class="speed-ticks"><span>느리게</span><span>빠르게</span></span></label>
+        <output id="speed-label" for="speed-slider">100만 년 / 초</output>
+        <button id="orbit-button" class="icon-button" aria-label="궤도 표시" aria-pressed="true" title="궤도 표시">◎</button>
+      </div>
+    </section>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <div id="loading"><div class="loading-star">✧</div><p>별빛을 모으는 중</p><small>당신의 우주가 곧 열립니다</small></div>
+    <div id="error-panel" hidden><h1>우주 화면을 열지 못했어요</h1><p id="error-message"></p><button onclick="location.reload()">다시 시도</button></div>
+    <div id="warp" aria-hidden="true"></div>
+  </main>
+
+  <dialog id="help-dialog">
+    <button id="close-help" class="icon-button dialog-close" aria-label="안내 닫기">×</button>
+    <p class="dialog-eyebrow">ASTRA 관측 안내</p><h2>아는 우주에서,<br>상상하는 우주까지.</h2>
+    <p>은하를 선택하고, 그 안의 별을 누른 뒤 <strong>행성계 탐사</strong>로 들어가 보세요. 행성을 고르고 <strong>가까이 관찰하기</strong>를 누르면 공전하는 모습을 따라갑니다.</p>
+    <div class="guide-grid"><div><strong>실제 천체</strong><p>우리 은하와 이웃 은하의 이름·형태, 태양계 행성의 기본 수치에 실제 자료를 사용합니다.</p></div><div><strong>생성 천체</strong><p>이름 없는 별과 외계 행성계는 주소를 바탕으로 생성합니다. 같은 주소에는 같은 세계가 나타납니다.</p></div></div>
+    <p class="model-note">화면의 거리와 크기는 탐사를 위해 조정했습니다. 태양계도 실제 날짜의 위치가 아닌 예시 시작 위치에서 움직입니다. 공전은 케플러 궤도 모형, 은하 회전은 단순 회전 모형이며, 외계 행성의 표면과 위성은 상상으로 표현합니다. 은하 간 이동·충돌과 우주 진화는 계산하지 않습니다.</p>
+    <div class="shortcuts"><span><kbd>Space</kbd> 시간 정지</span><span><kbd>Esc</kbd> 상위 범위</span><span>두 손가락으로 확대·축소</span></div>
+    <p class="sources">참고 자료 <a href="https://science.nasa.gov/solar-system/" target="_blank" rel="noopener">NASA 태양계</a><a href="https://ssd.jpl.nasa.gov/planets/phys_par.html" target="_blank" rel="noopener">JPL 행성 자료</a><a href="https://science.nasa.gov/universe/galaxies/" target="_blank" rel="noopener">NASA 은하</a></p>
+  </dialog>
+  <noscript><div class="noscript">이 우주를 탐험하려면 브라우저에서 자바스크립트를 켜 주세요.</div></noscript>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
