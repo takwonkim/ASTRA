@@ -7,7 +7,7 @@ destination = root / "dist"
 destination.mkdir(exist_ok=True)
 for name in ("index.html", "styles.css", "favicon.svg"):
     shutil.copy2(root / name, destination / name)
-for name in ("src", "vendor"):
+for name in ("src", "vendor", "data"):
     shutil.copytree(root / name, destination / name, dirs_exist_ok=True)
 (destination / ".nojekyll").touch()
 print(f"GitHub Pages 파일 준비 완료: {destination}")

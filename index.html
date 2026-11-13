@@ -7,7 +7,7 @@
   <meta name="description" content="실제 우주에서 시작해 미지의 은하와 행성을 탐험하세요. 시간을 조절하며 나만의 항로를 만드는 3D 우주 탐사 시뮬레이터, ASTRA.">
   <title>ASTRA — 별 너머의 세계</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=2">
+  <link rel="stylesheet" href="./styles.css?v=3">
   <script type="importmap">{"imports":{"three":"./vendor/three.module.min.js","three/addons/controls/OrbitControls.js":"./vendor/OrbitControls.js"}}</script>
 </head>
 <body>
@@ -25,13 +25,22 @@
         <button data-view="galaxy"><span>02</span> 은하 탐사</button>
         <button data-view="system"><span>03</span> 행성계</button>
       </nav>
-      <div class="header-actions"><span id="live-status"><i></i>시간 진행 중</span><button id="help-button" class="icon-button" aria-label="관측 안내">?</button><button id="fullscreen-button" class="icon-button" aria-label="전체 화면">⛶</button></div>
+      <div class="header-actions"><span id="live-status"><i></i>시간 진행 중</span><button id="sky-button" class="sky-button" aria-pressed="false">✧ 지구 하늘</button><button id="help-button" class="icon-button" aria-label="관측 안내">?</button><button id="fullscreen-button" class="icon-button" aria-label="전체 화면">⛶</button></div>
     </header>
 
     <button id="drawer-button" class="drawer-button" aria-expanded="false" aria-controls="destinations">☷ 목적지</button>
+    <button id="drawer-backdrop" class="drawer-backdrop" aria-label="목록 닫기" hidden></button>
     <aside class="destinations panel" id="destinations" aria-label="탐사 목적지">
       <div class="panel-eyebrow"><span>탐험 항로</span><span id="sector-code">구역 001</span></div>
       <button id="up-button" class="back-button">↖ 은하 지도로</button>
+      <section id="sky-controls" class="sky-controls" aria-label="지구 관측 설정" hidden>
+        <label>관측 장소<select id="sky-place"></select></label>
+        <div id="sky-custom" class="sky-coordinate-inputs" hidden><label>위도<input id="sky-latitude" type="number" min="-90" max="90" step="0.0001" value="37.5665" inputmode="decimal"></label><label>경도<input id="sky-longitude" type="number" min="-180" max="180" step="0.0001" value="126.9780" inputmode="decimal"></label></div>
+        <label><span id="sky-timezone">관측 시각 · 한국시간</span><input id="sky-datetime" type="datetime-local" min="1900-01-01T00:00" max="2100-12-31T23:59"></label>
+        <div class="sky-date-buttons"><button id="sky-tonight">오늘 밤 9시</button><button id="sky-now">지금</button></div>
+        <div class="sky-options"><label><input id="sky-lines" type="checkbox" checked> 별자리 선</label><label><input id="sky-names" type="checkbox" checked> 별자리 이름</label></div>
+        <p>밝기 6등급까지의 실제 별 지도입니다. 날씨·광공해·낮의 밝기는 재현하지 않습니다.</p>
+      </section>
       <div class="list-heading"><h2 id="list-title">항성 목록</h2><span id="list-count"></span></div>
       <label class="search"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="m12 12 5 5"/></svg><input id="search" type="search" placeholder="이 목록에서 검색" autocomplete="off" aria-label="목적지 검색"></label>
       <div id="destination-list" class="destination-list"></div>
@@ -43,17 +52,17 @@
       <p id="breadcrumb">국부은하군 / 우리 은하</p>
       <h1 id="scene-title">우리 은하<span>.</span></h1>
       <p id="scene-subtitle">익숙한 별에서, 아직 이름 없는 세계로.</p>
+      <p id="touch-hint" class="touch-hint">한 손가락 회전 · 두 손가락 확대</p>
       <div class="scene-meta"><span id="scene-count">20,000개의 별</span><span class="divider"></span><span id="scene-model">회전 모형 · 공간 재구성</span></div>
     </section>
 
     <aside class="object-card panel" id="object-card" aria-label="선택한 천체 정보">
-      <div class="panel-eyebrow"><span>관측 대상</span><span id="object-code">SOL</span></div>
+      <div class="panel-eyebrow"><span>관측 대상</span><span id="object-code">SOL</span><button id="object-toggle" aria-expanded="false" aria-controls="object-details">정보 보기 ⌃</button></div>
       <div id="object-art" class="object-art" aria-hidden="true"></div>
       <div id="object-badge" class="object-badge real">실제 천체</div>
       <h2 id="object-name">태양</h2>
       <p id="object-kind">황색 주계열성</p>
-      <dl id="object-facts" class="object-facts"></dl>
-      <p id="object-description" class="object-description"></p>
+      <div id="object-details"><dl id="object-facts" class="object-facts"></dl><p id="object-description" class="object-description"></p></div>
       <button id="travel-button" class="travel-button"><span>행성계 탐사</span><span>↗</span></button>
     </aside>
 
@@ -62,7 +71,7 @@
     <div class="scale-note"><span id="scale-level">은하 규모</span><small>탐험을 위한 배치 · 크기 강조</small></div>
 
     <section class="time-panel panel" aria-label="시뮬레이션 시간 조절">
-      <div class="time-top"><div><span class="time-dot"></span><span>관측 경과 시간</span><strong id="elapsed">기준 시점</strong></div><button id="reset-time" title="시간을 기준 시점으로 되돌리기">↺ <span>초기화</span></button></div>
+      <div class="time-top"><div><span class="time-dot"></span><span id="time-caption">관측 경과 시간</span><strong id="elapsed">기준 시점</strong></div><button id="reset-time" title="시간을 기준 시점으로 되돌리기">↺ <span>초기화</span></button></div>
       <div class="time-controls">
         <button id="reverse-button" class="icon-button" aria-label="시간 역재생" aria-pressed="false">↶</button>
         <button id="pause-button" class="play-button" aria-label="시간 정지">Ⅱ</button>
@@ -84,10 +93,12 @@
     <div class="guide-grid"><div><strong>실제 천체</strong><p>우리 은하와 이웃 은하의 이름·형태, 태양계 행성의 기본 수치에 실제 자료를 사용합니다.</p></div><div><strong>생성 천체</strong><p>이름 없는 별과 외계 행성계는 주소를 바탕으로 생성합니다. 같은 주소에는 같은 세계가 나타납니다.</p></div></div>
     <p class="model-note">거리와 크기는 탐사를 위해 조정했습니다. 태양계도 실제 날짜의 위치가 아닌 예시 위치에서 움직입니다. 공전은 케플러 모형, 은하 회전은 단순 회전 모형입니다. 항성의 표면·홍염, 외계 행성의 지형과 위성은 시각적 재구성입니다. 궁수자리 A*의 질량은 실제 자료의 근삿값을 쓰지만 강착원반은 관찰하기 쉽게 밝게 표현했습니다. 다른 은하의 블랙홀은 생성 천체이며, 빛의 휘어짐은 정밀한 상대론 계산이 아닌 시각화용 근사입니다. 은하 충돌과 우주 진화는 계산하지 않습니다.</p>
     <p class="model-note">범위가 바뀌면 관측 경과 시간은 0부터 표시하고, 천체의 움직임은 이어집니다. 초기화는 시뮬레이션 전체를 예시 시작 시점으로 되돌립니다.</p>
+    <p><strong>지구 하늘</strong>에서는 서울 등 관측 장소와 날짜·현지 시각을 선택합니다. 실제 별 좌표와 밝기를 사용하며 별자리 선·이름을 각각 끌 수 있습니다. 지구 표면 시점에서 드래그로 하늘을 둘러보고 별을 누르면 정보가 나옵니다.</p>
+    <p class="model-note">지구 하늘은 XHIP의 J2000 별 좌표에 세차와 지구 자전을 적용한 안내용 지도입니다. 고유운동·연주광행차·대기굴절·날씨·광공해·낮의 밝기 및 달·행성은 재현하지 않습니다. 망원경의 정밀 지향용 자료는 아닙니다. 별자리 연결선은 관습적인 그림입니다.</p>
     <div class="shortcuts"><span><kbd>Space</kbd> 시간 정지</span><span><kbd>Esc</kbd> 상위 범위</span><span>두 손가락으로 확대·축소</span></div>
-    <p class="sources">참고 자료 <a href="https://science.nasa.gov/solar-system/" target="_blank" rel="noopener">NASA 태양계</a><a href="https://ssd.jpl.nasa.gov/planets/phys_par.html" target="_blank" rel="noopener">JPL 행성 자료</a><a href="https://science.nasa.gov/universe/black-holes/" target="_blank" rel="noopener">NASA 블랙홀</a><a href="https://svs.gsfc.nasa.gov/14619" target="_blank" rel="noopener">강착원반 시각화</a></p>
+    <p class="sources">참고 자료 <a href="https://science.nasa.gov/solar-system/" target="_blank" rel="noopener">NASA 태양계</a><a href="https://ssd.jpl.nasa.gov/planets/phys_par.html" target="_blank" rel="noopener">JPL 행성 자료</a><a href="https://science.nasa.gov/universe/black-holes/" target="_blank" rel="noopener">NASA 블랙홀</a><a href="https://svs.gsfc.nasa.gov/14619" target="_blank" rel="noopener">강착원반 시각화</a><a href="https://github.com/ofrohn/d3-celestial" target="_blank" rel="noopener">XHIP·별자리 자료</a><a href="https://aa.usno.navy.mil/faq/alt_az" target="_blank" rel="noopener">관측 좌표 계산</a><a href="./data/NOTICE.txt" target="_blank" rel="noopener">자료 출처·라이선스</a></p>
   </dialog>
   <noscript><div class="noscript">이 우주를 탐험하려면 브라우저에서 자바스크립트를 켜 주세요.</div></noscript>
-  <script type="module" src="./src/main.js?v=2"></script>
+  <script type="module" src="./src/main.js?v=3"></script>
 </body>
 </html>

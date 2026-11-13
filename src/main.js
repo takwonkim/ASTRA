@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { STAR_COUNT, TAU, hash, random, galaxiesInSector, starAt, makeSystem, orbitPosition, visualOrbit, visualRadius, planetKinds, blackHoleIn } from './universe.js?v=2';
-import { createStarVisual, createBlackHoleVisual, updateObjectVisual } from './objects.js?v=2';
-import { DETAIL_SCALE, remapCamera, zoomBoundary } from './navigation.js?v=2';
+import { STAR_COUNT, TAU, hash, random, galaxiesInSector, starAt, makeSystem, orbitPosition, visualOrbit, visualRadius, planetKinds, blackHoleIn } from './universe.js?v=3';
+import { createStarVisual, createBlackHoleVisual, updateObjectVisual } from './objects.js?v=3';
+import { DETAIL_SCALE, remapCamera, zoomBoundary } from './navigation.js?v=3';
+import { loadSkyCatalog, createSkyMode } from './sky.js?v=3';
+import { OBSERVERS, SKY_RATES, tonight, localDateInput, dateFromLocal } from './sky-math.js?v=3';
 
 const $ = (id) => document.getElementById(id);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -15,6 +17,7 @@ let listItems = [], galaxyCatalog = galaxiesInSector(), lastFrame = 0, lastUI = 
 let preview = null, systemRoot = null, detailVisual = null, galaxyBlackHole = null, galaxyBackdrop = null;
 let focusTarget = null, scaleChanging = false, zoomUntil = 0, zoomDirection = 0, previousDistance = 0, zoomCooldown = 0;
 let viewEpoch = 0;
+let skyCatalog = null, skyMode = null, skyConfig = null, skySelection = null, lastSpaceHash = '', spacePaused = false, lastSkyFacts = 0, lastSkyList = 0;
 const clusterGroups = new Map();
 const galaxyData = new Map();
 const vector = new THREE.Vector3();
@@ -147,6 +150,18 @@ function disposeWorld(root = world) {
 }
 
 function clearWorld() {
+  if (skyMode) { skyConfig = { observer: skyMode.state.observer, date: new Date(skyMode.state.time) }; skyMode.dispose(); skyMode = null; }
+  document.body.classList.remove('sky-mode');
+  $('sky-controls').hidden = true;
+  $('sky-button').textContent = '✧ 지구 하늘';
+  $('sky-button').setAttribute('aria-pressed', 'false');
+  $('drawer-button').textContent = '☷ 목적지';
+  $('time-caption').textContent = '관측 경과 시간';
+  $('discover-button').hidden = false;
+  controls.enabled = true;
+  background.visible = true;
+  camera.fov = 49;
+  camera.updateProjectionMatrix();
   disposeWorld();
   world = new THREE.Group();
   scene.add(world);
@@ -444,6 +459,147 @@ function buildBlackHole(carried = null, backdrop = null) {
   selectBlackHole();
 }
 
+async function openEarthSky(fromRoute = false) {
+  if (state.view === 'sky') { goUp(); return; }
+  $('sky-button').disabled = true;
+  $('sky-button').textContent = '하늘 여는 중…';
+  try {
+    skyCatalog = await loadSkyCatalog();
+    if (!fromRoute) { lastSpaceHash = location.hash; spacePaused = state.paused; }
+    skyConfig ||= { observer: OBSERVERS[0], date: tonight(OBSERVERS[0]) };
+    navigate('sky', fromRoute);
+  } catch { toast('별자리 자료를 불러오지 못했습니다. 다시 시도해 주세요.'); }
+  finally { $('sky-button').disabled = false; if (state.view !== 'sky') $('sky-button').textContent = '✧ 지구 하늘'; }
+}
+
+function buildSky() {
+  const config = skyConfig || { observer: OBSERVERS[0], date: tonight(OBSERVERS[0]) };
+  clearWorld();
+  skyConfig = config;
+  document.body.classList.add('sky-mode');
+  $('sky-controls').hidden = false;
+  $('discover-button').hidden = true;
+  $('sky-button').textContent = '↗ 우주로';
+  $('sky-button').setAttribute('aria-pressed', 'true');
+  $('drawer-button').textContent = '☷ 관측 설정';
+  $('time-caption').textContent = '관측 시각';
+  controls.enabled = false;
+  background.visible = false;
+  skyMode = createSkyMode(skyCatalog, camera, renderer.domElement, { ...config, pixelRatio: renderer.getPixelRatio(), onStar: selectSkyStar });
+  world.add(skyMode.root);
+  for (const { constellation, object } of skyMode.anchors) addLabel(constellation.name, object, () => selectSkyConstellation(constellation), { key: `sky:${constellation.id}`, priority: 4 - constellation.rank });
+  for (const { name, object } of skyMode.directions) addLabel(name, object, () => {}, { key: `direction:${name}`, priority: 5 });
+  state.speed = 2;
+  state.direction = 1;
+  state.paused = true;
+  $('speed-slider').value = 2;
+  if (!$('sky-place').options.length) for (const observer of OBSERVERS) $('sky-place').add(new Option(observer.name, observer.id));
+  $('sky-lines').checked = true;
+  $('sky-names').checked = true;
+  updateSkyControls();
+  updateSkyList();
+  const recommended = skyMode.recommend();
+  if (recommended) selectSkyConstellation(recommended);
+  lastSkyFacts = 0;
+}
+
+function skyMetrics(selection) {
+  if (selection.type === 'constellation') {
+    const at = skyMode.coordinates(...selection.data.center);
+    return [['중심 고도', `${at.altitude.toFixed(1)}°`], ['방위각', `${at.azimuth.toFixed(1)}°`], ['관측 장소', skyMode.state.observer.name], ['자료', '실제 별 좌표']];
+  }
+  const star = selection.data;
+  const at = skyMode.coordinates(star[1], star[2]);
+  return [['겉보기 등급', decimal.format(star[3])], ['고도', `${at.altitude.toFixed(1)}°`], ['방위각', `${at.azimuth.toFixed(1)}°`], ['식별 번호', `HIP ${star[0]}`]];
+}
+
+function selectSkyConstellation(entry) {
+  skySelection = { type: 'constellation', data: entry };
+  state.selected = { type: 'constellation', key: `sky:${entry.id}` };
+  const above = skyMode.focus(...entry.center);
+  setObject({ name: entry.name, code: entry.id, kind: `별자리 · ${entry.latin}`, real: true, color: '#9bbfea', type: 'galaxy',
+    metrics: skyMetrics(skySelection), description: '선택한 장소와 시각에서 본 실제 별의 배치입니다. 중심이 지평선 아래라면 시각이나 장소를 바꿔 보세요. 별자리 선과 이름을 각각 끌 수 있어요.',
+    action: above ? '가운데 놓기' : '중심이 지평선 아래', onTravel: () => skyMode.focus(...entry.center) });
+  $('object-badge').textContent = '실제 별 좌표';
+  $('travel-button').disabled = !above;
+}
+
+function selectSkyStar(star) {
+  skySelection = { type: 'star', data: star };
+  state.selected = { type: 'sky-star', key: 'sky-star' };
+  const name = star[5] || `HIP ${star[0]}`;
+  const previous = labels.find((label) => label.key === 'sky-star');
+  if (previous) { previous.button.remove(); labels = labels.filter((label) => label !== previous); }
+  addLabel(name, skyMode.markStar(star), () => {}, { key: 'sky-star', selected: true, priority: 6 });
+  setObject({ name, code: `HIP ${star[0]}`, kind: '지구에서 관측한 실제 항성', real: true, color: '#e5e9f4', type: 'star', metrics: skyMetrics(skySelection),
+    description: '겉보기 등급은 숫자가 작을수록 밝습니다. 별의 위치와 밝기는 XHIP 관측 자료를 바탕으로 표시합니다.', action: '가운데 놓기', onTravel: () => skyMode.focus(star[1], star[2]) });
+  $('object-badge').textContent = '실제 별 좌표';
+}
+
+function updateSkyList() {
+  listItems = skyCatalog.constellations.map((entry) => {
+    const altitude = skyMode.coordinates(...entry.center).altitude;
+    return { name: entry.name, subtitle: `${entry.latin} · 중심 ${altitude < 0 ? '지평선 아래' : `고도 ${altitude.toFixed(0)}°`}`, color: '#a1c5e7', type: 'constellation', key: `sky:${entry.id}`, real: true, data: entry, above: altitude >= 0 };
+  }).sort((a, b) => Number(b.above) - Number(a.above) || a.name.localeCompare(b.name, 'ko'));
+  renderList();
+  lastSkyList = performance.now();
+}
+
+function updateSkyControls() {
+  const observer = skyMode.state.observer;
+  $('sky-place').value = observer.id;
+  $('sky-custom').hidden = observer.id !== 'custom';
+  $('sky-latitude').value = observer.latitude;
+  $('sky-longitude').value = observer.longitude;
+  $('sky-timezone').textContent = observer.id === 'custom' ? '관측 시각 · 세계시(UTC)' : `관측 시각 · ${observer.name} 현지 시간`;
+  $('sky-datetime').value = localDateInput(new Date(skyMode.state.time), observer.timezone);
+}
+
+function updateSkyHeadings() {
+  const observer = skyMode.state.observer;
+  $('scene-title').textContent = `${observer.id === 'custom' ? '지정한 위치' : observer.name}의 밤하늘`;
+  $('breadcrumb').textContent = `지구 관측 / ${observer.latitude < 0 ? '남위' : '북위'} ${Math.abs(observer.latitude).toFixed(2)}° · ${observer.longitude < 0 ? '서경' : '동경'} ${Math.abs(observer.longitude).toFixed(2)}°`;
+  $('scene-subtitle').textContent = '실제 별의 위치에서 만나는 88개의 별자리.';
+  $('touch-hint').textContent = '드래그로 하늘 보기 · 두 손가락 확대';
+  $('scene-count').textContent = '실제 별 5,044개 · 별자리 88개';
+  $('scene-model').textContent = '지평선 위의 별 · 밝기 강조';
+  $('list-title').textContent = '별자리';
+  $('sector-code').textContent = '지구 관측';
+  $('up-button').textContent = '↖ 우주 탐사로';
+  $('up-button').disabled = false;
+  $('orbit-button').disabled = false;
+  $('orbit-button').setAttribute('aria-label', '별자리 선 표시');
+  $('orbit-button').title = '별자리 선 표시';
+  $('orbit-button').setAttribute('aria-pressed', String(skyMode.state.lines));
+  document.querySelectorAll('[data-view]').forEach((button) => { button.classList.remove('active'); button.setAttribute('aria-current', 'false'); });
+}
+
+function updateSkyTimeUI() {
+  if (!skyMode) return;
+  const date = new Date(skyMode.state.time), observer = skyMode.state.observer;
+  $('elapsed').textContent = new Intl.DateTimeFormat('ko-KR', { timeZone: observer.timezone, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date);
+  $('speed-label').textContent = `${state.direction < 0 ? '−' : ''}${readable(SKY_RATES[state.speed])}배`;
+  $('pause-button').textContent = state.paused ? '▶' : 'Ⅱ';
+  $('pause-button').setAttribute('aria-label', state.paused ? '시간 재생' : '시간 정지');
+  $('reverse-button').setAttribute('aria-pressed', String(state.direction < 0));
+  $('reverse-button').setAttribute('aria-label', state.direction < 0 ? '시간 정방향 재생' : '시간 역재생');
+  $('live-status').lastChild.textContent = state.paused ? '관측 시각 고정' : '하늘 시간 진행 중';
+  $('zoom-destination').textContent = '하늘 확대';
+  $('zoom-return').textContent = '드래그로 둘러보기';
+  $('scale-level').textContent = `시야 ${camera.fov.toFixed(0)}°`;
+  if (document.activeElement !== $('sky-datetime')) $('sky-datetime').value = localDateInput(date, observer.timezone);
+  const now = performance.now();
+  if (skySelection && now - lastSkyFacts > 1000) {
+    facts(skyMetrics(skySelection));
+    const [ra, dec] = skySelection.type === 'constellation' ? skySelection.data.center : skySelection.data.slice(1, 3);
+    const above = skyMode.coordinates(ra, dec).altitude >= 0;
+    $('travel-button').disabled = !above;
+    $('travel-button').firstElementChild.textContent = above ? '가운데 놓기' : '중심이 지평선 아래';
+    lastSkyFacts = now;
+  }
+  if (now - lastSkyList > 5000 && ($('destinations').classList.contains('open') || innerWidth > 700)) updateSkyList();
+}
+
 function facts(items) {
   $('object-facts').replaceChildren(...items.map(([name, value]) => {
     const wrap = document.createElement('div');
@@ -535,7 +691,7 @@ function selectPlanet(planet, travel = false) {
   setObject({ name: planet.name, code: `${state.star.code} / ${String.fromCharCode(98 + planet.id).toUpperCase()}`, kind: planetKinds[planet.kind], real: planet.real, color: planet.color, type: 'planet',
     metrics: [['항성까지 거리', `${decimal.format(planet.au)} AU`], ['공전 주기', planet.period < 1000 ? `${readable(planet.period)}일` : `${readable(planet.period / 365.25)}년`], ['반지름', `${planet.radius} 지구반지름`], ['궤도 이심률', planet.eccentricity.toFixed(3)]],
     description: planet.real ? '기본 수치는 실제 행성 자료에 기반합니다. 표면 무늬와 시작 위치, 위성의 배치는 탐험용 표현입니다.' : '같은 주소에서 다시 만날 수 있는 행성. 표면과 위성은 이 세계를 위한 상상입니다.',
-    action: '가까이 관찰하기', onTravel: () => approachPlanet(planet) });
+    action: planet.real && planet.id === 2 ? '지구에서 하늘 보기' : '가까이 관찰하기', onTravel: () => planet.real && planet.id === 2 ? openEarthSky() : approachPlanet(planet) });
   updateRoute();
   controls.minDistance = visualRadius(planet) * 1.12;
   focusObject(planetMeshes[planet.id]?.group, true);
@@ -574,7 +730,8 @@ function renderList() {
     const dot = document.createElement('span'); dot.className = `destination-dot${item.real ? ' real' : ''}`;
     button.append(thumb, content, dot);
     button.onclick = () => {
-      if (state.view === 'cluster') selectGalaxy(item.data);
+      if (state.view === 'sky') selectSkyConstellation(item.data);
+      else if (state.view === 'cluster') selectGalaxy(item.data);
       else if (item.type === 'blackhole') selectBlackHole();
       else if (state.view === 'galaxy') selectStar(item.data);
       else selectPlanet(item.data);
@@ -587,6 +744,7 @@ function renderList() {
 
 function updateHeadings() {
   const view = state.view;
+  if (view === 'sky') { updateSkyHeadings(); return; }
   $('scene-title').replaceChildren(document.createTextNode(view === 'cluster' ? (state.sector === 0 ? '은하 너머로' : `미지의 구역 ${state.sector}`) : view === 'galaxy' ? state.galaxy.name : view === 'blackhole' ? blackHoleIn(state.galaxy).name : state.star.real ? '태양계' : state.star.name));
   const period = document.createElement('span'); period.textContent = '.'; $('scene-title').append(period);
   $('breadcrumb').textContent = view === 'cluster' ? (state.sector === 0 ? '국부은하군과 상상의 이웃' : `생성 우주 / 구역 ${state.sector}`) : view === 'galaxy' ? `은하 구역 ${state.sector} / ${state.galaxy.code}` : `${state.galaxy.name} / ${view === 'blackhole' ? '은하 중심' : state.star.code}`;
@@ -600,18 +758,24 @@ function updateHeadings() {
   $('sector-code').textContent = `구역 ${String(state.sector).padStart(3, '0')}`;
   $('scale-level').textContent = view === 'cluster' ? '은하와 은하 사이' : view === 'galaxy' ? '은하 규모' : view === 'blackhole' ? '블랙홀 근접 관측' : '행성계 규모';
   $('orbit-button').disabled = view === 'cluster' || view === 'blackhole';
+  $('orbit-button').setAttribute('aria-label', '궤도 표시');
+  $('orbit-button').setAttribute('aria-pressed', String(state.orbits));
+  $('orbit-button').title = '궤도 표시';
+  $('touch-hint').textContent = '한 손가락 회전 · 두 손가락 확대';
   document.querySelectorAll('[data-view]').forEach((button) => { const active = button.dataset.view === view || view === 'blackhole' && button.dataset.view === 'system'; button.classList.toggle('active', active); button.setAttribute('aria-current', active ? 'page' : 'false'); });
   document.querySelector('[data-view="system"]').innerHTML = '<span>03</span> 근접 관측';
 }
 
 function navigate(view, fromHistory = false) {
   rebuilding = true;
+  if (state.view === 'sky' && view !== 'sky') state.paused = spacePaused;
   if (state.view !== view) viewEpoch = state.years;
   state.view = view;
   $('search').value = '';
   state.speed = 3;
   $('speed-slider').value = state.speed;
-  if (view === 'cluster') buildCluster();
+  if (view === 'sky') buildSky();
+  else if (view === 'cluster') buildCluster();
   else if (view === 'galaxy') buildGalaxy();
   else if (view === 'blackhole') buildBlackHole();
   else buildSystem();
@@ -688,6 +852,7 @@ function changeScale(next) {
 }
 
 function updateContinuousZoom(now) {
+  if (state.view === 'sky') return;
   const distance = camera.position.distanceTo(controls.target);
   if (!animation && now > zoomCooldown) {
     if (distance < previousDistance * 0.999) { zoomDirection = 1; zoomUntil = now + 700; }
@@ -713,6 +878,11 @@ function updateContinuousZoom(now) {
 function updateRoute(replace = true) {
   if (rebuilding || !state.galaxy || !state.star) return;
   const params = new URLSearchParams({ view: state.view, sector: state.sector, galaxy: state.galaxy.id, star: state.star.id });
+  if (state.view === 'sky' && skyMode) {
+    params.set('place', skyMode.state.observer.id);
+    params.set('time', new Date(skyMode.state.time).toISOString());
+    if (skyMode.state.observer.id === 'custom') { params.set('lat', skyMode.state.observer.latitude); params.set('lon', skyMode.state.observer.longitude); }
+  }
   if (state.view === 'system' && state.selected?.type === 'planet') params.set('planet', state.selected.key);
   const next = `#${params}`;
   if (location.hash !== next) history[replace ? 'replaceState' : 'pushState'](null, '', next);
@@ -726,13 +896,24 @@ function parseRoute() {
   state.galaxy = galaxyCatalog.find((galaxy) => galaxy.id === params.get('galaxy')) || galaxyCatalog[0];
   const index = Number(params.get('star') || 0);
   state.star = starAt(state.galaxy, Number.isInteger(index) && index >= 0 && index < STAR_COUNT ? index : 0);
-  const view = ['cluster', 'galaxy', 'system', 'blackhole'].includes(params.get('view')) ? params.get('view') : 'cluster';
+  const view = ['cluster', 'galaxy', 'system', 'blackhole', 'sky'].includes(params.get('view')) ? params.get('view') : 'cluster';
+  if (view === 'sky') {
+    const observer = { ...(OBSERVERS.find((entry) => entry.id === params.get('place')) || OBSERVERS[0]) };
+    if (observer.id === 'custom') {
+      const latitude = Number(params.get('lat')), longitude = Number(params.get('lon'));
+      if (params.has('lat') && params.has('lon') && Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180) Object.assign(observer, { latitude, longitude });
+    }
+    const date = new Date(params.get('time') || '');
+    skyConfig = { observer, date: Number.isFinite(date.getTime()) ? date : tonight(observer) };
+    if (!skyCatalog) { navigate('cluster', true); openEarthSky(true); return; }
+  }
   const selectedPlanet = params.has('planet') ? Number(params.get('planet')) : -1;
   navigate(view, true);
   if (view === 'system' && Number.isInteger(selectedPlanet) && state.planets[selectedPlanet]) selectPlanet(state.planets[selectedPlanet]);
 }
 
 function updateTimeUI() {
+  if (state.view === 'sky') { updateSkyTimeUI(); return; }
   const speed = speeds[state.view][state.speed];
   const close = state.view === 'system' || state.view === 'blackhole';
   let unit = close ? '일' : '년';
@@ -789,9 +970,10 @@ function updateCelestialPositions() {
 
 function projectLabels() {
   const rects = [];
-  const width = innerWidth, height = innerHeight;
+  const width = $('app').clientWidth, height = $('app').clientHeight;
   for (const label of [...labels].sort((a, b) => (b.button.classList.contains('selected') ? 10 : b.priority) - (a.button.classList.contains('selected') ? 10 : a.priority))) {
     label.object.getWorldPosition(vector);
+    if (state.view === 'sky' && (vector.y < 0 || !skyMode.state.names && label.key?.startsWith('sky:'))) { label.button.style.display = 'none'; continue; }
     vector.project(camera);
     const x = (vector.x * 0.5 + 0.5) * width, y = (-vector.y * 0.5 + 0.5) * height;
     const w = Math.min(180, label.button.textContent.length * 9 + 30);
@@ -808,6 +990,13 @@ function animate(now) {
   requestAnimationFrame(animate);
   const dt = Math.min((now - (lastFrame || now)) / 1000, 0.06);
   lastFrame = now;
+  if (state.view === 'sky' && skyMode) {
+    skyMode.step(dt, state.paused || document.hidden, state.direction, state.speed);
+    renderer.render(scene, camera);
+    projectLabels();
+    if (now - lastUI > 150) { updateSkyTimeUI(); lastUI = now; }
+    return;
+  }
   if (!state.paused && !document.hidden) state.years += dt * speeds[state.view][state.speed] * state.direction;
   updateCelestialPositions();
   if (animation) {
@@ -852,9 +1041,10 @@ function animate(now) {
   if (now - lastUI > 150) { updateTimeUI(); lastUI = now; }
 }
 
-function closeDrawer() { $('destinations').classList.remove('open'); $('drawer-button').setAttribute('aria-expanded', 'false'); }
+function closeDrawer() { $('destinations').classList.remove('open'); $('drawer-button').setAttribute('aria-expanded', 'false'); $('drawer-backdrop').hidden = true; }
 function goUp() {
-  if (state.view === 'system' || state.view === 'blackhole') navigate('galaxy');
+  if (state.view === 'sky') { if (lastSpaceHash) location.hash = lastSpaceHash; else navigate('cluster'); }
+  else if (state.view === 'system' || state.view === 'blackhole') navigate('galaxy');
   else if (state.view === 'galaxy') navigate('cluster');
   else { state.sector = 0; state.galaxy = galaxiesInSector(0)[0]; state.star = starAt(state.galaxy, 0); navigate('cluster'); }
 }
@@ -872,6 +1062,31 @@ function bindEvents() {
   document.querySelectorAll('[data-view]').forEach((button) => button.onclick = () => navigate(button.dataset.view === 'system' && state.selected?.type === 'blackhole' ? 'blackhole' : button.dataset.view));
   $('search').oninput = renderList;
   $('up-button').onclick = goUp;
+  $('sky-button').onclick = () => openEarthSky();
+  function refreshSky() {
+    updateSkyControls(); updateSkyHeadings(); updateSkyList(); updateSkyTimeUI(); updateRoute();
+    if (skySelection?.type === 'constellation') selectSkyConstellation(skySelection.data);
+    else if (skySelection) selectSkyStar(skySelection.data);
+  }
+  $('sky-place').onchange = () => {
+    skyMode.setObserver(OBSERVERS.find((observer) => observer.id === $('sky-place').value));
+    refreshSky();
+  };
+  for (const id of ['sky-latitude', 'sky-longitude']) $(id).onchange = () => {
+    if (!$('sky-latitude').value || !$('sky-longitude').value || !$('sky-latitude').reportValidity() || !$('sky-longitude').reportValidity()) return;
+    skyMode.setObserver({ ...OBSERVERS.at(-1), latitude: Number($('sky-latitude').value), longitude: Number($('sky-longitude').value) });
+    refreshSky();
+  };
+  $('sky-datetime').onchange = () => {
+    if (!$('sky-datetime').reportValidity()) return;
+    const date = dateFromLocal($('sky-datetime').value, skyMode.state.observer.timezone);
+    if (!date) { toast('유효한 현지 시각을 입력해 주세요. 서머타임 전환 때는 없는 시각도 있습니다.'); return; }
+    skyMode.setDate(date); state.paused = true; refreshSky();
+  };
+  $('sky-tonight').onclick = () => { skyMode.setDate(tonight(skyMode.state.observer)); state.paused = true; refreshSky(); };
+  $('sky-now').onclick = () => { skyMode.setDate(new Date()); state.speed = 0; state.direction = 1; state.paused = false; $('speed-slider').value = 0; refreshSky(); };
+  $('sky-lines').onchange = () => { skyMode.state.lines = $('sky-lines').checked; updateSkyHeadings(); };
+  $('sky-names').onchange = () => { skyMode.state.names = $('sky-names').checked; };
   $('discover-button').onclick = () => {
     if (state.view === 'cluster') {
       state.sector++;
@@ -888,13 +1103,19 @@ function bindEvents() {
   $('pause-button').onclick = () => { state.paused = !state.paused; updateTimeUI(); };
   $('reverse-button').onclick = () => { state.direction *= -1; updateTimeUI(); };
   $('speed-slider').oninput = (event) => { state.speed = Number(event.target.value); updateTimeUI(); };
-  $('reset-time').onclick = () => { state.years = 0; viewEpoch = 0; updateCelestialPositions(); updateTimeUI(); toast('기준 시점으로 돌아왔습니다'); };
+  $('reset-time').onclick = () => {
+    if (skyMode) { skyMode.setDate(tonight(skyMode.state.observer)); state.paused = true; refreshSky(); toast('오늘 밤 9시로 돌아왔습니다'); return; }
+    state.years = 0; viewEpoch = 0; updateCelestialPositions(); updateTimeUI(); toast('기준 시점으로 돌아왔습니다');
+  };
   $('orbit-button').onclick = () => {
+    if (skyMode) { skyMode.state.lines = !skyMode.state.lines; $('sky-lines').checked = skyMode.state.lines; updateSkyHeadings(); return; }
     state.orbits = !state.orbits;
     if (orbitGroup) orbitGroup.visible = state.orbits;
     $('orbit-button').setAttribute('aria-pressed', String(state.orbits));
   };
-  $('drawer-button').onclick = () => { const open = $('destinations').classList.toggle('open'); $('drawer-button').setAttribute('aria-expanded', String(open)); };
+  $('drawer-button').onclick = () => { const open = $('destinations').classList.toggle('open'); $('drawer-button').setAttribute('aria-expanded', String(open)); $('drawer-backdrop').hidden = !open; };
+  $('drawer-backdrop').onclick = closeDrawer;
+  $('object-toggle').onclick = () => { const expanded = $('object-card').classList.toggle('expanded'); $('object-toggle').setAttribute('aria-expanded', String(expanded)); $('object-toggle').textContent = expanded ? '정보 접기 ⌄' : '정보 보기 ⌃'; };
   $('help-button').onclick = () => $('help-dialog').showModal();
   $('close-help').onclick = () => $('help-dialog').close();
   $('help-dialog').addEventListener('click', (event) => { if (event.target === $('help-dialog')) { const r = $('help-dialog').getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) $('help-dialog').close(); } });
@@ -906,6 +1127,7 @@ function bindEvents() {
   document.querySelector('.brand').onclick = (event) => { event.preventDefault(); state.sector = 0; state.galaxy = galaxiesInSector()[0]; state.star = starAt(state.galaxy, 0); navigate('cluster'); };
   for (const direction of [1, -1]) {
     $(direction === 1 ? 'zoom-in' : 'zoom-out').onclick = () => {
+      if (skyMode) { skyMode.zoom(direction === 1 ? .8 : 1.25); return; }
       animation = null;
       controls.enabled = true;
       const offset = camera.position.clone().sub(controls.target);
@@ -916,7 +1138,9 @@ function bindEvents() {
     };
   }
   addEventListener('keydown', (event) => {
-    if (event.target.matches('input,button,select') || $('help-dialog').open) return;
+    if ($('help-dialog').open) return;
+    if (event.code === 'Escape' && $('destinations').classList.contains('open')) { closeDrawer(); return; }
+    if (event.target.matches('input,button,select,textarea')) return;
     if (event.code === 'Space') { event.preventDefault(); state.paused = !state.paused; updateTimeUI(); }
     if (event.code === 'Escape') { closeDrawer(); goUp(); }
   });
@@ -926,13 +1150,19 @@ function bindEvents() {
     zoomDirection = event.deltaY < 0 ? 1 : -1;
     zoomUntil = now + 700;
   }, { passive: true, capture: true });
-  let down = null;
-  renderer.domElement.addEventListener('pointerdown', (event) => { down = { x: event.clientX, y: event.clientY, id: event.pointerId }; closeDrawer(); });
-  renderer.domElement.addEventListener('pointercancel', () => { down = null; });
+  let down = null, multiple = false;
+  const activePointers = new Set();
+  renderer.domElement.addEventListener('pointerdown', (event) => { activePointers.add(event.pointerId); if (activePointers.size > 1) multiple = true; down = { x: event.clientX, y: event.clientY, id: event.pointerId }; closeDrawer(); });
+  renderer.domElement.addEventListener('pointercancel', (event) => { activePointers.delete(event.pointerId); down = null; if (!activePointers.size) multiple = false; });
   renderer.domElement.addEventListener('pointerup', (event) => {
-    if (!down || down.id !== event.pointerId || Math.hypot(event.clientX - down.x, event.clientY - down.y) > 5 || animation) return;
+    activePointers.delete(event.pointerId);
+    const wasMultiple = multiple;
+    if (!activePointers.size) multiple = false;
+    const tap = down;
     down = null;
-    pointer.set(event.clientX / innerWidth * 2 - 1, -(event.clientY / innerHeight) * 2 + 1);
+    if (skyMode || wasMultiple || !tap || tap.id !== event.pointerId || Math.hypot(event.clientX - tap.x, event.clientY - tap.y) > 5 || animation) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
     raycaster.setFromCamera(pointer, camera);
     raycaster.params.Points.threshold = Math.max(0.35, camera.position.distanceTo(controls.target) * 0.0025);
     const hits = raycaster.intersectObjects(pickables, false);
@@ -942,21 +1172,23 @@ function bindEvents() {
     else hit.object.userData.select?.();
   });
   renderer.domElement.addEventListener('webglcontextlost', (event) => { event.preventDefault(); showError('그래픽 연결이 중단되었습니다. 화면을 다시 열어 주세요.'); });
-  addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+  const resize = () => { const width = $('app').clientWidth, height = $('app').clientHeight; camera.aspect = width / height; camera.updateProjectionMatrix(); renderer.setSize(width, height); };
+  addEventListener('resize', resize);
+  new ResizeObserver(resize).observe($('app'));
 }
 
 function showError(message) { $('error-message').textContent = message; $('error-panel').hidden = false; $('loading').classList.add('done'); }
 
 try {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
-  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, matchMedia('(pointer: coarse)').matches ? 1.5 : 1.75));
+  renderer.setSize($('app').clientWidth, $('app').clientHeight);
   renderer.setClearColor('#04070d');
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.15;
   $('viewport').append(renderer.domElement);
   scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(49, innerWidth / innerHeight, 0.05, 9000);
+  camera = new THREE.PerspectiveCamera(49, $('app').clientWidth / $('app').clientHeight, 0.05, 9000);
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.07;
@@ -965,6 +1197,7 @@ try {
   controls.zoomSpeed = 0.8;
   glow = glowTexture();
   createBackground();
+  if (new URLSearchParams(location.hash.slice(1)).get('view') === 'sky') skyCatalog = await loadSkyCatalog();
   parseRoute();
   bindEvents();
   renderer.render(scene, camera);

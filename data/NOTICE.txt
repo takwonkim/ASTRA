@@ -1,0 +1,16 @@
+ASTRA night-sky data
+
+Source: Olaf Frohn, d3-celestial
+https://github.com/ofrohn/d3-celestial
+Pinned source commit: 7e720a3de062059d4c5400a379146a601d9010e0
+License: BSD-3-Clause; see D3-CELESTIAL-LICENSE.txt.
+
+Stellar coordinates, apparent magnitudes and B-V indices are from XHIP:
+Anderson E., Francis C. (2012), An Extended Hipparcos Compilation,
+VizieR V/137D, as converted to J2000 GeoJSON by d3-celestial.
+Constellation names/line drawings and translations are from d3-celestial;
+see that project's source credits for IAU, catalog and Stellarium inputs.
+
+ASTRA retains the numerical star data and reduces the schema for web use.
+The two separate Serpens line groups are combined into one of 88 constellations.
+Data derivation script: scripts/prepare-sky-data.py
