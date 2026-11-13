@@ -1,14 +1,22 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { STAR_COUNT, TAU, hash, random, galaxiesInSector, starAt, makeSystem, orbitPosition, visualOrbit, visualRadius, planetKinds } from './universe.js';
+import { STAR_COUNT, TAU, hash, random, galaxiesInSector, starAt, makeSystem, orbitPosition, visualOrbit, visualRadius, planetKinds, blackHoleIn } from './universe.js?v=2';
+import { createStarVisual, createBlackHoleVisual, updateObjectVisual } from './objects.js?v=2';
+import { DETAIL_SCALE, remapCamera, zoomBoundary } from './navigation.js?v=2';
 
 const $ = (id) => document.getElementById(id);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const state = { view: 'galaxy', sector: 0, galaxy: null, star: null, planets: [], selected: null, years: 0, paused: false, direction: 1, speed: 3, orbits: true };
 const speeds = { galaxy: [1e3, 1e4, 1e5, 1e6, 1e7, 5e7, 1e8], cluster: [1e3, 1e4, 1e5, 1e6, 1e7, 5e7, 1e8], system: [0.01, 0.1, 1, 10, 100, 1000, 10000].map((days) => days / 365.25) };
+speeds.blackhole = [0.0001, 0.001, 0.01, 0.1, 1, 10, 100].map((days) => days / 365.25);
 let renderer, scene, camera, controls, world, galaxyGroup, orbitGroup, background;
 let labels = [], pickables = [], planetMeshes = [], starSurface, animation = null, follow = null, previousFollow = null;
 let listItems = [], galaxyCatalog = galaxiesInSector(), lastFrame = 0, lastUI = 0, toastTimer, rebuilding = false;
+let preview = null, systemRoot = null, detailVisual = null, galaxyBlackHole = null, galaxyBackdrop = null;
+let focusTarget = null, scaleChanging = false, zoomUntil = 0, zoomDirection = 0, previousDistance = 0, zoomCooldown = 0;
+let viewEpoch = 0;
+const clusterGroups = new Map();
+const galaxyData = new Map();
 const vector = new THREE.Vector3();
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -50,42 +58,65 @@ function sprite(color, size, opacity = 1) {
   return result;
 }
 
-function pointCloud(positions, colors, size, opacity = 1) {
+function pointCloud(positions, colors, size, opacity = 1, maximumSize = 6) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  return new THREE.Points(geometry, new THREE.PointsMaterial({ size, map: glow, transparent: true, vertexColors: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true }));
+  const material = new THREE.PointsMaterial({ size, map: glow, transparent: true, vertexColors: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true });
+  material.onBeforeCompile = (shader) => { shader.vertexShader = shader.vertexShader.replace('#include <logdepthbuf_vertex>', `#include <logdepthbuf_vertex>\ngl_PointSize = min(gl_PointSize, ${maximumSize.toFixed(1)});`); };
+  material.customProgramCacheKey = () => `astra-points-${maximumSize}`;
+  return new THREE.Points(geometry, material);
 }
 
 function createGalaxy(galaxy, count, radius) {
   const group = new THREE.Group();
+  let data = galaxyData.get(galaxy.id);
+  if (!data) {
   const positions = [], colors = [], dustPositions = [], dustColors = [];
   const tint = new THREE.Color();
-  const scale = radius / 150;
   for (let index = 0; index < count; index++) {
     const star = starAt(galaxy, index);
     const r = Math.hypot(star.position[0], star.position[2]);
-    positions.push(...star.position.map((v) => v * scale));
+    positions.push(...star.position);
     tint.set(star.color);
     if (r < 25) tint.lerp(new THREE.Color('#ffd5a3'), 0.65);
     else tint.lerp(new THREE.Color().setHSL(galaxy.hue, 0.55, 0.7), 0.35);
     colors.push(tint.r, tint.g, tint.b);
     if (index % 7 === 0) {
-      dustPositions.push(...star.position.map((v) => v * scale));
+      dustPositions.push(...star.position);
       tint.setHSL(galaxy.hue + 0.015 * Math.sin(index), 0.6, r < 30 ? 0.5 : 0.4);
       if (r < 25) tint.set('#a08163');
       dustColors.push(tint.r, tint.g, tint.b);
     }
   }
-  const stars = pointCloud(positions, colors, 1.3 * scale, 0.9);
+  data = [positions, colors, dustPositions, dustColors].map((values) => new Float32Array(values));
+  if (galaxyData.size >= 16) galaxyData.delete(galaxyData.keys().next().value);
+  galaxyData.set(galaxy.id, data);
+  }
+  const stars = pointCloud(data[0], data[1], 1.3, 0.9);
   group.add(stars);
-  group.add(pointCloud(dustPositions, dustColors, 21 * scale, 0.12));
-  const core = sprite('#e7c4a0', radius * 0.5, 0.9);
+  const dust = pointCloud(data[2], data[3], 21, 0.12, 96);
+  group.add(dust);
+  const core = sprite('#e7c4a0', 75, 0.9);
   core.scale.y *= 0.8;
   group.add(core);
-  group.add(sprite('#ffdcac', radius * 0.15, 0.8));
+  group.add(sprite('#ffdcac', 22.5, 0.8));
   group.userData.stars = stars;
+  group.userData.dust = dust;
+  group.userData.core = core;
+  setGalaxyScale(group, radius / 150);
   return group;
+}
+
+function setGalaxyScale(group, scale) {
+  group.scale.setScalar(scale);
+  group.userData.stars.material.size = 1.3 * scale;
+  group.userData.dust.material.size = 21 * scale;
+}
+
+function orientGalaxy(group, galaxy) {
+  group.rotation.set(0.15 + (hash(galaxy.id) % 8) * 0.09, (hash(galaxy.id) % 7) * 0.3 + state.years / 220e6 * TAU, 0.1);
+  group.userData.baseRotationY = (hash(galaxy.id) % 7) * 0.3;
 }
 
 function createBackground() {
@@ -101,10 +132,10 @@ function createBackground() {
   scene.add(background);
 }
 
-function disposeWorld() {
-  if (!world) return;
+function disposeWorld(root = world) {
+  if (!root) return;
   const textures = new Set();
-  world.traverse((object) => {
+  root.traverse((object) => {
     object.geometry?.dispose();
     for (const material of [object.material].flat().filter(Boolean)) {
       if (material.map && material.map !== glow) textures.add(material.map);
@@ -112,7 +143,7 @@ function disposeWorld() {
     }
   });
   textures.forEach((texture) => texture.dispose());
-  scene.remove(world);
+  scene.remove(root);
 }
 
 function clearWorld() {
@@ -126,6 +157,12 @@ function clearWorld() {
   galaxyGroup = null;
   orbitGroup = null;
   starSurface = null;
+  systemRoot = null;
+  detailVisual = null;
+  galaxyBlackHole = null;
+  galaxyBackdrop = null;
+  preview = null;
+  focusTarget = null;
   animation = null;
   follow = null;
   previousFollow = null;
@@ -153,44 +190,64 @@ function moveCamera(position, target = [0, 0, 0], duration = 1000) {
   controls.enabled = false;
 }
 
-function entrance(position) {
-  controls.target.set(0, 0, 0);
-  camera.position.set(...position.map((value) => value * 1.13));
+function entrance(position, target = [0, 0, 0]) {
+  if (scaleChanging) return;
+  camera.up.set(0, 1, 0);
+  controls.target.set(...target);
+  camera.position.set(...position.map((value, i) => target[i] + (value - target[i]) * 1.13));
   controls.update();
-  moveCamera(position, [0, 0, 0], 1200);
+  moveCamera(position, target, 1200);
   $('warp').classList.remove('active');
   void $('warp').offsetWidth;
   $('warp').classList.add('active');
 }
 
-function buildCluster() {
+function buildCluster(carried = null) {
   clearWorld();
+  clusterGroups.clear();
   galaxyCatalog = galaxiesInSector(state.sector);
   for (const galaxy of galaxyCatalog) {
-    const mesh = createGalaxy(galaxy, 2200, galaxy.size);
+    const mesh = carried && galaxy.id === state.galaxy.id ? carried : createGalaxy(galaxy, STAR_COUNT, galaxy.size);
     mesh.position.set(...galaxy.position);
-    mesh.rotation.set(0.15 + (hash(galaxy.id) % 8) * 0.09, (hash(galaxy.id) % 7) * 0.3, 0.1);
-    mesh.userData.baseRotationY = mesh.rotation.y;
+    setGalaxyScale(mesh, galaxy.size / 150);
+    if (mesh === carried) mesh.userData.baseRotationY = mesh.rotation.y - state.years / 220e6 * TAU;
+    else orientGalaxy(mesh, galaxy);
     world.add(mesh);
-    const hit = new THREE.Mesh(new THREE.SphereGeometry(galaxy.size * 0.8, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));
-    mesh.add(hit);
-    hit.userData.select = () => selectGalaxy(galaxy);
-    pickables.push(hit);
+    clusterGroups.set(galaxy.id, mesh);
+    mesh.userData.stars.userData.galaxyStars = false;
+    mesh.userData.stars.userData.select = () => selectGalaxy(galaxy);
+    pickables.push(mesh.userData.stars);
     addLabel(galaxy.name, mesh, () => selectGalaxy(galaxy), { key: galaxy.id, caption: galaxy.real ? galaxy.code : '미지의 은하', priority: galaxy.id === state.galaxy.id ? 2 : 0 });
   }
-  controls.minDistance = 80;
-  controls.maxDistance = 2200;
+  controls.minDistance = 0.1;
+  controls.maxDistance = 3500;
   entrance([40, 470, 740]);
   listItems = galaxyCatalog.map((data) => ({ name: data.name, subtitle: data.kind, color: '#b5ccf0', type: 'galaxy', key: data.id, real: data.real, data }));
   selectGalaxy(galaxyCatalog.find((g) => g.id === state.galaxy.id) || galaxyCatalog[0]);
 }
 
-function buildGalaxy() {
+function buildGalaxy(carried = null, carriedDetail = null) {
+  const wantsBlackHole = state.selected?.type === 'blackhole' || state.view === 'blackhole';
   clearWorld();
-  galaxyGroup = createGalaxy(state.galaxy, STAR_COUNT, 150);
+  galaxyGroup = carried || createGalaxy(state.galaxy, STAR_COUNT, 150);
+  galaxyGroup.position.set(0, 0, 0);
+  setGalaxyScale(galaxyGroup, 1);
+  if (carried) galaxyGroup.userData.baseRotationY = galaxyGroup.rotation.y - state.years / 220e6 * TAU;
+  else orientGalaxy(galaxyGroup, state.galaxy);
   world.add(galaxyGroup);
   galaxyGroup.userData.stars.userData.galaxyStars = true;
   pickables.push(galaxyGroup.userData.stars);
+  galaxyBlackHole = carriedDetail?.kind === 'blackhole' ? carriedDetail.root : galaxyGroup.userData.blackHole || createBlackHoleVisual();
+  galaxyBlackHole.position.set(0, 0, 0);
+  galaxyBlackHole.quaternion.identity();
+  galaxyBlackHole.scale.setScalar(DETAIL_SCALE);
+  galaxyGroup.add(galaxyBlackHole);
+  galaxyGroup.userData.blackHole = galaxyBlackHole;
+  const hole = blackHoleIn(state.galaxy);
+  addLabel(hole.name, galaxyBlackHole, () => selectBlackHole(), { key: 'blackhole', caption: '블랙홀', priority: 2 });
+  galaxyBlackHole.userData.surface.userData.select = () => selectBlackHole();
+  pickables.push(galaxyBlackHole.userData.surface);
+  preview = carriedDetail?.kind === 'system' ? carriedDetail : galaxyGroup.userData.preview || null;
   orbitGroup = new THREE.Group();
   const ringPoints = [];
   for (let i = 0; i < 160; i++) { const a = i / 160 * TAU; ringPoints.push(new THREE.Vector3(Math.cos(a) * 166, 0, Math.sin(a) * 166)); }
@@ -198,23 +255,27 @@ function buildGalaxy() {
   world.add(orbitGroup);
   const indices = [0, ...Array.from({ length: 21 }, (_, i) => 17 + (hash(state.galaxy.id) + i * 929) % (STAR_COUNT - 30))];
   if (!indices.includes(state.star.id)) indices.push(state.star.id);
-  listItems = indices.map((index) => {
+  listItems = [{ name: hole.name, subtitle: '중심 블랙홀', color: '#e7a15e', type: 'blackhole', key: 'blackhole', real: hole.real, data: hole }, ...indices.map((index) => {
     const star = starAt(state.galaxy, index);
     return { name: star.name, subtitle: `${star.type}형 · ${star.label}`, color: star.color, type: 'star', key: star.id, real: star.real, data: star };
-  });
-  for (const item of listItems.slice(0, 7)) addStarLabel(item.data);
-  controls.minDistance = 8;
-  controls.maxDistance = 850;
-  entrance([25, 205, 310]);
-  selectStar(state.star);
+  })];
+  for (const item of listItems.slice(1, 8)) addStarLabel(item.data);
+  controls.minDistance = 0.1;
+  controls.maxDistance = 1600;
+  galaxyGroup.updateMatrixWorld(true);
+  const center = wantsBlackHole ? new THREE.Vector3() : new THREE.Vector3(...state.star.position).applyMatrix4(galaxyGroup.matrixWorld);
+  entrance(center.clone().add(new THREE.Vector3(25, 205, 310)).toArray(), center.toArray());
+  if (wantsBlackHole) selectBlackHole();
+  else selectStar(state.star);
 }
 
 function addStarLabel(star) {
-  if (labels.some((label) => label.key === star.id)) return;
+  const existing = labels.find((label) => label.key === star.id);
+  if (existing) return existing;
   const anchor = new THREE.Object3D();
   anchor.position.set(...star.position);
   galaxyGroup.add(anchor);
-  addLabel(star.name, anchor, () => selectStar(star), { key: star.id, selected: star.id === state.star.id, priority: star.id === state.star.id ? 3 : 0 });
+  return addLabel(star.name, anchor, () => selectStar(star), { key: star.id, selected: star.id === state.star.id, priority: star.id === state.star.id ? 3 : 0 });
 }
 
 function surfaceTexture(planet) {
@@ -274,24 +335,13 @@ function atmosphere(radius, color) {
   }));
 }
 
-function buildSystem() {
-  clearWorld();
-  state.planets = makeSystem(state.star);
-  orbitGroup = new THREE.Group();
-  world.add(orbitGroup);
-  const starlight = new THREE.PointLight(state.star.color, 1000, 0, 1.3);
-  world.add(starlight, new THREE.AmbientLight('#8194b4', 1.1));
-  starSurface = new THREE.Mesh(new THREE.SphereGeometry(3.5, 48, 32), new THREE.ShaderMaterial({
-    uniforms: { tint: { value: new THREE.Color(state.star.color) }, time: { value: 0 } },
-    vertexShader: 'varying vec3 vNormal; varying vec3 vPosition; void main(){vNormal=normal;vPosition=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
-    fragmentShader: 'uniform vec3 tint; uniform float time; varying vec3 vNormal; varying vec3 vPosition; void main(){float n=sin(vPosition.x*17.+sin(vPosition.y*9.+time))*sin(vPosition.z*14.+time*.3);gl_FragColor=vec4(tint*(1.+n*.18),1.);}'
-  }));
-  world.add(starSurface);
-  world.add(sprite(state.star.color, 24, 0.65), sprite(state.star.color, 12, 0.55));
-  starSurface.userData.select = () => selectCentralStar();
-  pickables.push(starSurface);
-  addLabel(state.star.name, starSurface, () => selectCentralStar(), { key: 'star', priority: 3 });
-  state.planets.forEach((planet, index) => {
+function createSystemGraph(star) {
+  const root = new THREE.Group(), orbits = new THREE.Group(), entries = [];
+  const planets = makeSystem(star);
+  const starlight = new THREE.PointLight(star.color, 1000, 0, 1.3);
+  const visual = createStarVisual(star, glow);
+  root.add(orbits, starlight, new THREE.AmbientLight('#8194b4', 1.1), visual);
+  planets.forEach((planet, index) => {
     const radius = visualRadius(planet);
     const group = new THREE.Group();
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 32), new THREE.MeshStandardMaterial({ map: surfaceTexture(planet), roughness: planet.kind === 'ocean' ? 0.65 : 0.95, metalness: 0, emissive: planet.kind === 'lava' ? '#62190b' : '#000000', emissiveIntensity: 0.5 }));
@@ -313,21 +363,85 @@ function buildSystem() {
       group.add(moon);
       moons.push(moon);
     }
-    world.add(group);
+    root.add(group);
     const linePoints = [];
     for (let i = 0; i < 200; i++) linePoints.push(new THREE.Vector3(...orbitPosition({ ...planet, phase: i / 200 * TAU }, 0, visualOrbit(index))));
-    orbitGroup.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(linePoints), new THREE.LineBasicMaterial({ color: '#5e83ab', transparent: true, opacity: 0.21 })));
-    mesh.userData.select = () => selectPlanet(planet);
-    pickables.push(mesh);
-    planetMeshes.push({ group, mesh, moons, planet, index });
-    addLabel(planet.name.replace(state.star.name + ' ', ''), group, () => selectPlanet(planet), { key: index, priority: index === 2 ? 2 : 0 });
+    orbits.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(linePoints), new THREE.LineBasicMaterial({ color: '#5e83ab', transparent: true, opacity: 0.21 })));
+    entries.push({ group, mesh, moons, planet, index });
   });
+  return { root, planets, entries, orbits, visual, starlight, seed: star.seed, kind: 'system' };
+}
+
+function attachPreview(graph) {
+  graph.root.position.set(...state.star.position);
+  graph.root.quaternion.identity();
+  graph.root.scale.setScalar(DETAIL_SCALE);
+  graph.starlight.intensity = 1000 * DETAIL_SCALE ** 1.3;
+  graph.orbits.visible = state.orbits;
+  galaxyGroup.add(graph.root);
+  galaxyGroup.userData.preview = graph;
+  planetMeshes = graph.entries;
+  detailVisual = graph.visual;
+}
+
+function ensurePreview() {
+  if (preview?.seed !== state.star.seed) {
+    if (preview) {
+      disposeWorld(preview.root);
+      preview.root.removeFromParent();
+    }
+    preview = createSystemGraph(state.star);
+  }
+  attachPreview(preview);
+}
+
+function buildSystem(carried = null, backdrop = null) {
+  clearWorld();
+  const graph = carried || createSystemGraph(state.star);
+  graph.root.position.set(0, 0, 0);
+  graph.root.quaternion.copy(carried?.orientation || new THREE.Quaternion());
+  graph.root.scale.setScalar(1);
+  graph.starlight.intensity = 1000;
+  state.planets = graph.planets;
+  planetMeshes = graph.entries;
+  orbitGroup = graph.orbits;
+  systemRoot = graph.root;
+  preview = graph;
+  detailVisual = graph.visual;
+  world.add(systemRoot);
+  if (backdrop) { galaxyBackdrop = backdrop; world.add(backdrop); }
+  starSurface = graph.visual.userData.surface;
+  starSurface.userData.select = () => selectCentralStar();
+  pickables.push(starSurface);
+  addLabel(state.star.name, starSurface, () => selectCentralStar(), { key: 'star', priority: 3 });
+  for (const entry of planetMeshes) {
+    entry.mesh.userData.select = () => selectPlanet(entry.planet);
+    pickables.push(entry.mesh);
+    addLabel(entry.planet.name.replace(state.star.name + ' ', ''), entry.group, () => selectPlanet(entry.planet), { key: entry.index, priority: entry.index === 2 ? 2 : 0 });
+  }
   listItems = state.planets.map((planet) => ({ name: planet.name, subtitle: `${planetKinds[planet.kind]} · ${decimal.format(planet.au)} AU`, color: planet.color, type: 'planet', key: planet.id, real: planet.real, data: planet }));
-  controls.minDistance = 2;
-  controls.maxDistance = 330;
+  controls.minDistance = graph.visual.userData.radius * 1.15;
+  controls.maxDistance = 800;
   entrance([20, 76, 104]);
   selectCentralStar();
   updateCelestialPositions();
+}
+
+function buildBlackHole(carried = null, backdrop = null) {
+  clearWorld();
+  systemRoot = carried?.root || createBlackHoleVisual();
+  systemRoot.position.set(0, 0, 0);
+  systemRoot.quaternion.copy(carried?.orientation || new THREE.Quaternion());
+  systemRoot.scale.setScalar(1);
+  detailVisual = systemRoot;
+  world.add(systemRoot);
+  if (backdrop) { galaxyBackdrop = backdrop; world.add(backdrop); }
+  state.planets = [];
+  listItems = [{ name: blackHoleIn(state.galaxy).name, subtitle: '블랙홀 · 강착원반', color: '#f6af5c', type: 'blackhole', key: 'blackhole', data: blackHoleIn(state.galaxy), real: blackHoleIn(state.galaxy).real }];
+  controls.minDistance = 9;
+  controls.maxDistance = 800;
+  entrance([0, 14, 47]);
+  selectBlackHole();
 }
 
 function facts(items) {
@@ -358,24 +472,48 @@ function setObject({ name, code, kind, real, color, type, description, metrics, 
 }
 
 function selectGalaxy(galaxy) {
+  if (state.galaxy?.id !== galaxy.id) state.star = starAt(galaxy, 0);
   state.galaxy = galaxy;
-  state.star = starAt(galaxy, 0);
   state.selected = { type: 'galaxy', key: galaxy.id };
   setObject({ name: galaxy.name, code: galaxy.code, kind: galaxy.kind, real: galaxy.real, color: '#b9ccea', type: 'galaxy',
     description: galaxy.description, metrics: [['항성계', '클릭하여 생성'], ['자료 구분', galaxy.real ? '실제 은하 기반' : '상상한 은하']],
     action: '은하 안으로', onTravel: () => navigate('galaxy') });
   updateRoute();
+  focusObject(clusterGroups.get(galaxy.id));
 }
 
 function selectStar(star) {
   state.star = star;
   state.selected = { type: 'star', key: star.id };
-  addStarLabel(star);
+  const label = addStarLabel(star);
+  ensurePreview();
   setObject({ name: star.name, code: star.code, kind: `${star.type}형 · ${star.label}`, real: star.real, color: star.color, type: 'star',
     metrics: [['표면 온도', `${decimal.format(star.temperature)} K`], ['항성 질량', `${star.mass} 태양질량`], ['행성', `${makeSystem(star).length}개`], ['소속 은하', state.galaxy.name]],
     description: star.real ? '우리의 출발점. 여덟 행성이 도는 태양계에서 탐험을 시작하세요.' : '처음 만나는 별입니다. 이 별 주위에는 어떤 세계가 있을까요?',
     action: '행성계 탐사', onTravel: () => navigate('system') });
   updateRoute();
+  focusObject(label.object);
+}
+
+function selectBlackHole() {
+  const hole = blackHoleIn(state.galaxy);
+  state.selected = { type: 'blackhole', key: 'blackhole' };
+  setObject({ name: hole.name, code: hole.code, kind: '초대질량 블랙홀', real: hole.real, color: '#f2ad5f', type: 'blackhole',
+    metrics: [['질량', `${readable(hole.mass)} 태양질량`], ['지평선 반지름¹', `${decimal.format(hole.radiusAU)} AU`], ['관측 구조', '그림자 · 강착원반'], ['표현', '시각화용 근사']],
+    description: hole.real ? '우리 은하 중심의 실제 블랙홀. 강착원반은 구조를 관찰하기 쉽게 밝게 재구성했습니다. ¹비회전 모형 기준.' : '탐험을 위해 생성한 중심 블랙홀입니다. 강착원반과 빛의 휘어짐은 시각적 근사입니다. ¹비회전 모형 기준.',
+    action: state.view === 'blackhole' ? '강착원반 가까이 보기' : '블랙홀 관찰',
+    onTravel: () => state.view === 'blackhole' ? moveCamera([0, 7, 25]) : navigate('blackhole') });
+  updateRoute();
+  if (state.view === 'galaxy') focusObject(galaxyBlackHole);
+}
+
+function focusObject(object, track = false) {
+  if (!object || rebuilding || scaleChanging) return;
+  follow = null;
+  previousFollow = null;
+  animation = null;
+  controls.enabled = true;
+  focusTarget = { object, track };
 }
 
 function selectCentralStar() {
@@ -388,6 +526,8 @@ function selectCentralStar() {
     description: '행성을 선택해 가까이 다가가 보세요. 시간을 빠르게 돌리면 서로 다른 공전 주기가 보입니다.',
     action: '행성계 전체 보기', onTravel: () => { follow = null; moveCamera([20, 76, 104]); } });
   updateRoute();
+  controls.minDistance = detailVisual.userData.radius * 1.15;
+  focusObject(starSurface);
 }
 
 function selectPlanet(planet, travel = false) {
@@ -397,6 +537,8 @@ function selectPlanet(planet, travel = false) {
     description: planet.real ? '기본 수치는 실제 행성 자료에 기반합니다. 표면 무늬와 시작 위치, 위성의 배치는 탐험용 표현입니다.' : '같은 주소에서 다시 만날 수 있는 행성. 표면과 위성은 이 세계를 위한 상상입니다.',
     action: '가까이 관찰하기', onTravel: () => approachPlanet(planet) });
   updateRoute();
+  controls.minDistance = visualRadius(planet) * 1.12;
+  focusObject(planetMeshes[planet.id]?.group, true);
   if (travel) approachPlanet(planet);
 }
 
@@ -404,7 +546,7 @@ function approachPlanet(planet) {
   const entry = planetMeshes[planet.id];
   if (!entry) return;
   follow = null;
-  const target = entry.group.position;
+  const target = entry.group.getWorldPosition(new THREE.Vector3());
   const r = visualRadius(planet) * (planet.rings ? 2 : 1);
   // 항성 쪽에서 접근하면 행성의 낮 쪽과 밤의 경계가 함께 보인다.
   const sunward = target.clone().negate().normalize().multiplyScalar(r * 5.2);
@@ -433,6 +575,7 @@ function renderList() {
     button.append(thumb, content, dot);
     button.onclick = () => {
       if (state.view === 'cluster') selectGalaxy(item.data);
+      else if (item.type === 'blackhole') selectBlackHole();
       else if (state.view === 'galaxy') selectStar(item.data);
       else selectPlanet(item.data);
       closeDrawer();
@@ -444,30 +587,33 @@ function renderList() {
 
 function updateHeadings() {
   const view = state.view;
-  $('scene-title').replaceChildren(document.createTextNode(view === 'cluster' ? (state.sector === 0 ? '은하 너머로' : `미지의 구역 ${state.sector}`) : view === 'galaxy' ? state.galaxy.name : state.star.real ? '태양계' : state.star.name));
+  $('scene-title').replaceChildren(document.createTextNode(view === 'cluster' ? (state.sector === 0 ? '은하 너머로' : `미지의 구역 ${state.sector}`) : view === 'galaxy' ? state.galaxy.name : view === 'blackhole' ? blackHoleIn(state.galaxy).name : state.star.real ? '태양계' : state.star.name));
   const period = document.createElement('span'); period.textContent = '.'; $('scene-title').append(period);
-  $('breadcrumb').textContent = view === 'cluster' ? (state.sector === 0 ? '국부은하군과 상상의 이웃' : `생성 우주 / 구역 ${state.sector}`) : view === 'galaxy' ? `은하 구역 ${state.sector} / ${state.galaxy.code}` : `${state.galaxy.name} / ${state.star.code}`;
-  $('scene-subtitle').textContent = view === 'cluster' ? '하나의 은하를 넘어, 또 다른 세계로.' : view === 'galaxy' ? '익숙한 별에서, 아직 이름 없는 세계로.' : '작은 세계의 움직임에서, 우주의 시간을 발견하세요.';
-  $('scene-count').textContent = view === 'cluster' ? `${galaxyCatalog.length}개의 은하 · 다음 구역으로 확장` : view === 'galaxy' ? `${STAR_COUNT.toLocaleString('ko-KR')}개의 별 · 모두 탐사 가능` : `${state.planets.length}개의 행성`;
-  $('scene-model').textContent = view === 'system' ? '케플러 공전 · 거리 압축' : '회전 모형 · 공간 재구성';
-  $('list-title').textContent = view === 'cluster' ? '은하 목록' : view === 'galaxy' ? '추천 항성' : '행성 목록';
-  $('up-button').textContent = view === 'system' ? '↖ 은하 탐사로' : view === 'galaxy' ? '↖ 은하 지도로' : '↖ 첫 번째 은하 구역';
+  $('breadcrumb').textContent = view === 'cluster' ? (state.sector === 0 ? '국부은하군과 상상의 이웃' : `생성 우주 / 구역 ${state.sector}`) : view === 'galaxy' ? `은하 구역 ${state.sector} / ${state.galaxy.code}` : `${state.galaxy.name} / ${view === 'blackhole' ? '은하 중심' : state.star.code}`;
+  $('scene-subtitle').textContent = view === 'cluster' ? '하나의 은하를 넘어, 또 다른 세계로.' : view === 'galaxy' ? '익숙한 별에서, 아직 이름 없는 세계로.' : view === 'blackhole' ? '블랙홀의 그림자와 뜨거운 가스 원반을 관찰하세요.' : '작은 세계의 움직임에서, 우주의 시간을 발견하세요.';
+  $('scene-count').textContent = view === 'cluster' ? `${galaxyCatalog.length}개의 은하 · 연속 확대` : view === 'galaxy' ? `${STAR_COUNT.toLocaleString('ko-KR')}개의 별 · 블랙홀 탐사` : view === 'blackhole' ? '강착원반 · 광자 고리' : `${state.planets.length}개의 행성`;
+  $('scene-model').textContent = view === 'blackhole' ? '빛의 휘어짐 · 시각적 근사' : view === 'system' ? '케플러 공전 · 거리 압축' : '회전 모형 · 공간 재구성';
+  $('list-title').textContent = view === 'cluster' ? '은하 목록' : view === 'galaxy' ? '별과 블랙홀' : view === 'blackhole' ? '블랙홀' : '행성 목록';
+  $('up-button').textContent = view === 'system' || view === 'blackhole' ? '↖ 은하 탐사로' : view === 'galaxy' ? '↖ 은하 지도로' : '↖ 첫 번째 은하 구역';
   $('up-button').disabled = view === 'cluster' && state.sector === 0;
   $('discover-label').textContent = view === 'cluster' ? '다음 은하 구역으로' : '미지의 별로 떠나기';
   $('sector-code').textContent = `구역 ${String(state.sector).padStart(3, '0')}`;
-  $('scale-level').textContent = view === 'cluster' ? '은하와 은하 사이' : view === 'galaxy' ? '은하 규모' : '행성계 규모';
-  $('orbit-button').disabled = view === 'cluster';
-  document.querySelectorAll('[data-view]').forEach((button) => { button.classList.toggle('active', button.dataset.view === view); button.setAttribute('aria-current', button.dataset.view === view ? 'page' : 'false'); });
+  $('scale-level').textContent = view === 'cluster' ? '은하와 은하 사이' : view === 'galaxy' ? '은하 규모' : view === 'blackhole' ? '블랙홀 근접 관측' : '행성계 규모';
+  $('orbit-button').disabled = view === 'cluster' || view === 'blackhole';
+  document.querySelectorAll('[data-view]').forEach((button) => { const active = button.dataset.view === view || view === 'blackhole' && button.dataset.view === 'system'; button.classList.toggle('active', active); button.setAttribute('aria-current', active ? 'page' : 'false'); });
+  document.querySelector('[data-view="system"]').innerHTML = '<span>03</span> 근접 관측';
 }
 
 function navigate(view, fromHistory = false) {
   rebuilding = true;
+  if (state.view !== view) viewEpoch = state.years;
   state.view = view;
   $('search').value = '';
   state.speed = 3;
   $('speed-slider').value = state.speed;
   if (view === 'cluster') buildCluster();
   else if (view === 'galaxy') buildGalaxy();
+  else if (view === 'blackhole') buildBlackHole();
   else buildSystem();
   if (orbitGroup) orbitGroup.visible = state.orbits;
   updateHeadings();
@@ -475,6 +621,93 @@ function navigate(view, fromHistory = false) {
   closeDrawer();
   rebuilding = false;
   updateRoute(fromHistory);
+  previousDistance = camera.position.distanceTo(controls.target);
+  zoomUntil = 0;
+}
+
+function changeScale(next) {
+  scene.updateMatrixWorld(true);
+  const previousView = state.view;
+  let from, to, galaxy, detail, backdrop = null;
+  if (previousView === 'cluster') {
+    galaxy = clusterGroups.get(state.galaxy.id);
+    from = galaxy.matrixWorld.clone();
+    galaxy.removeFromParent();
+  } else if (previousView === 'galaxy' && next === 'cluster') {
+    galaxy = galaxyGroup;
+    from = galaxy.matrixWorld.clone();
+    galaxy.removeFromParent();
+  } else if (previousView === 'galaxy') {
+    const hole = state.selected?.type === 'blackhole';
+    detail = hole ? { root: galaxyBlackHole, kind: 'blackhole' } : preview;
+    from = detail.root.matrixWorld.clone();
+    detail.orientation = detail.root.getWorldQuaternion(new THREE.Quaternion());
+    const destination = new THREE.Matrix4().compose(new THREE.Vector3(), detail.orientation, new THREE.Vector3(1, 1, 1));
+    backdrop = galaxyGroup;
+    const backdropMatrix = destination.clone().multiply(from.clone().invert()).multiply(backdrop.matrixWorld);
+    detail.root.removeFromParent();
+    backdrop.removeFromParent();
+    if (hole) backdrop.userData.blackHole = null;
+    else backdrop.userData.preview = null;
+    backdropMatrix.decompose(backdrop.position, backdrop.quaternion, backdrop.scale);
+    backdrop.userData.stars.material.size = 1.3 / DETAIL_SCALE;
+    backdrop.userData.dust.material.size = 21 / DETAIL_SCALE;
+    next = hole ? 'blackhole' : 'system';
+  } else {
+    from = systemRoot.matrixWorld.clone();
+    detail = previousView === 'blackhole' ? { root: systemRoot, kind: 'blackhole' } : preview;
+    detail.root.removeFromParent();
+    galaxy = galaxyBackdrop;
+    galaxy?.removeFromParent();
+  }
+  scaleChanging = true;
+  rebuilding = true;
+  state.view = next;
+  viewEpoch = state.years;
+  state.speed = 3;
+  $('speed-slider').value = 3;
+  $('search').value = '';
+  if (next === 'cluster') { buildCluster(galaxy); to = clusterGroups.get(state.galaxy.id); }
+  else if (next === 'galaxy') {
+    buildGalaxy(galaxy, detail);
+    to = previousView === 'cluster' ? galaxyGroup : previousView === 'blackhole' ? galaxyBlackHole : preview.root;
+  } else if (next === 'blackhole') { buildBlackHole(detail, backdrop); to = systemRoot; }
+  else { buildSystem(detail, backdrop); to = systemRoot; }
+  scene.updateMatrixWorld(true);
+  remapCamera(camera, controls.target, from, to.matrixWorld);
+  if (previousView === 'cluster' && next === 'galaxy') selectBlackHole();
+  controls.enabled = true;
+  controls.update();
+  previousDistance = camera.position.distanceTo(controls.target);
+  zoomCooldown = performance.now() + 180;
+  rebuilding = false;
+  scaleChanging = false;
+  updateHeadings();
+  updateTimeUI();
+  updateRoute();
+}
+
+function updateContinuousZoom(now) {
+  const distance = camera.position.distanceTo(controls.target);
+  if (!animation && now > zoomCooldown) {
+    if (distance < previousDistance * 0.999) { zoomDirection = 1; zoomUntil = now + 700; }
+    else if (distance > previousDistance * 1.001) { zoomDirection = -1; zoomUntil = now + 700; }
+    if (now < zoomUntil) {
+      let next;
+      if (state.view === 'cluster') {
+        const target = clusterGroups.get(state.galaxy.id);
+        next = zoomBoundary('cluster', camera.position.distanceTo(target.position), zoomDirection, state.galaxy.size);
+      } else if (state.view === 'galaxy') {
+        if (zoomDirection < 0) next = zoomBoundary('galaxy', camera.position.length(), -1);
+        else {
+          const object = state.selected?.type === 'blackhole' ? galaxyBlackHole : preview?.root;
+          if (object) next = zoomBoundary('galaxy', camera.position.distanceTo(object.getWorldPosition(new THREE.Vector3())), 1);
+        }
+      } else next = zoomBoundary(state.view, camera.position.length(), zoomDirection);
+      if (next) { changeScale(next); return; }
+    }
+  }
+  previousDistance = distance;
 }
 
 function updateRoute(replace = true) {
@@ -493,7 +726,7 @@ function parseRoute() {
   state.galaxy = galaxyCatalog.find((galaxy) => galaxy.id === params.get('galaxy')) || galaxyCatalog[0];
   const index = Number(params.get('star') || 0);
   state.star = starAt(state.galaxy, Number.isInteger(index) && index >= 0 && index < STAR_COUNT ? index : 0);
-  const view = ['cluster', 'galaxy', 'system'].includes(params.get('view')) ? params.get('view') : 'galaxy';
+  const view = ['cluster', 'galaxy', 'system', 'blackhole'].includes(params.get('view')) ? params.get('view') : 'cluster';
   const selectedPlanet = params.has('planet') ? Number(params.get('planet')) : -1;
   navigate(view, true);
   if (view === 'system' && Number.isInteger(selectedPlanet) && state.planets[selectedPlanet]) selectPlanet(state.planets[selectedPlanet]);
@@ -501,20 +734,43 @@ function parseRoute() {
 
 function updateTimeUI() {
   const speed = speeds[state.view][state.speed];
-  const unit = state.view === 'system' ? '일' : '년';
-  const amount = state.view === 'system' ? speed * 365.25 : speed;
+  const close = state.view === 'system' || state.view === 'blackhole';
+  let unit = close ? '일' : '년';
+  let amount = close ? speed * 365.25 : speed;
+  if (close && amount < .01) { amount *= 86400; unit = '초'; }
   $('speed-label').textContent = `${state.direction < 0 ? '−' : ''}${readable(amount, 2)}${unit} / 초`;
-  const abs = Math.abs(state.years);
-  $('elapsed').textContent = abs < 0.00001 ? '기준 시점' : abs < 1 ? `${state.years < 0 ? '−' : '+'}${readable(abs * 365.25, 1)}일` : `${state.years < 0 ? '−' : '+'}${readable(abs, 2)}년`;
+  const elapsedYears = state.years - viewEpoch;
+  const abs = Math.abs(elapsedYears);
+  const days = abs * 365.25;
+  const duration = days < 1 / 1440 ? `${readable(days * 86400, 1)}초` : days < 1 / 24 ? `${readable(days * 1440, 1)}분` : days < 1 ? `${readable(days * 24, 1)}시간` : abs < 1 ? `${readable(days, 1)}일` : `${readable(abs, 2)}년`;
+  $('elapsed').textContent = abs < 1e-12 ? '기준 시점' : `${elapsedYears < 0 ? '−' : '+'}${duration}`;
   $('pause-button').textContent = state.paused ? '▶' : 'Ⅱ';
   $('pause-button').setAttribute('aria-label', state.paused ? '시간 재생' : '시간 정지');
   $('reverse-button').setAttribute('aria-pressed', String(state.direction < 0));
   $('reverse-button').setAttribute('aria-label', state.direction < 0 ? '시간 정방향 재생' : '시간 역재생');
   $('live-status').lastChild.textContent = state.paused ? '시간 정지됨' : state.direction < 0 ? '시간 역재생 중' : '시간 진행 중';
+  const destination = state.view === 'cluster' ? state.galaxy.name : state.view === 'galaxy' ? state.selected?.type === 'blackhole' ? blackHoleIn(state.galaxy).name : `${state.star.name}의 행성계` : state.selected?.type === 'planet' ? state.planets[state.selected.key].name : state.view === 'blackhole' ? '강착원반' : state.star.name;
+  $('zoom-destination').textContent = `확대 → ${destination}`;
+  $('zoom-return').textContent = state.view === 'cluster' ? '천체 클릭으로 초점 이동' : `축소 → ${state.view === 'galaxy' ? '은하 지도' : '은하 전체'}`;
+  const distance = camera.position.distanceTo(controls.target);
+  const galaxyDistance = state.view === 'cluster' ? distance * 150 / state.galaxy.size : close ? distance * DETAIL_SCALE : distance;
+  $('scale-level').textContent = `${close ? '근접 관측' : state.view === 'cluster' ? '은하 지도' : '은하 내부'} · ${readable(2500 / Math.max(.001, galaxyDistance), 1)}배`;
+}
+
+function updateGalaxyAppearance() {
+  const groups = state.view === 'cluster' ? [...clusterGroups.values()] : [galaxyGroup || galaxyBackdrop].filter(Boolean);
+  for (const group of groups) {
+    const distance = camera.position.distanceTo(group.getWorldPosition(new THREE.Vector3())) / group.scale.x;
+    const density = THREE.MathUtils.clamp((400 / Math.max(1, distance)) ** 1.5, .2, 1);
+    group.userData.stars.material.opacity = .9 * density;
+    group.userData.dust.material.opacity = .12 * density * THREE.MathUtils.smoothstep(distance, 40, 180);
+    const coreVisibility = THREE.MathUtils.smoothstep(distance, 25, 110);
+    for (const child of group.children) if (child.isSprite) child.material.opacity = (child === group.userData.core ? .9 : .8) * coreVisibility;
+  }
 }
 
 function updateCelestialPositions() {
-  if (galaxyGroup) galaxyGroup.rotation.y = state.years / 220e6 * TAU;
+  if (galaxyGroup) galaxyGroup.rotation.y = galaxyGroup.userData.baseRotationY + state.years / 220e6 * TAU;
   if (state.view === 'cluster') {
     for (const child of world.children) child.rotation.y = child.userData.baseRotationY + state.years / 220e6 * TAU;
   }
@@ -527,7 +783,8 @@ function updateCelestialPositions() {
       moon.position.set(Math.cos(angle) * r, Math.sin(angle * 0.7) * r * 0.15, Math.sin(angle) * r);
     });
   }
-  if (starSurface) starSurface.material.uniforms.time.value = (state.years * 365.25 % 10000) * 0.03;
+  if (detailVisual) updateObjectVisual(detailVisual, state.years * 365.25, camera);
+  if (galaxyBlackHole) updateObjectVisual(galaxyBlackHole, state.years * 365.25, camera);
 }
 
 function projectLabels() {
@@ -555,7 +812,7 @@ function animate(now) {
   updateCelestialPositions();
   if (animation) {
     if (animation.followAfter) {
-      const delta = animation.followAfter.position.clone().sub(animation.toTarget);
+      const delta = animation.followAfter.getWorldPosition(new THREE.Vector3()).sub(animation.toTarget);
       animation.to.add(delta);
       animation.toTarget.add(delta);
     }
@@ -565,17 +822,30 @@ function animate(now) {
     controls.target.lerpVectors(animation.fromTarget, animation.toTarget, ease);
     if (t === 1) {
       follow = animation.followAfter || null;
-      previousFollow = follow?.position.clone() || null;
+      previousFollow = follow?.getWorldPosition(new THREE.Vector3()) || null;
       animation = null;
       controls.enabled = true;
     }
   } else if (follow) {
-    const delta = follow.position.clone().sub(previousFollow);
+    const current = follow.getWorldPosition(new THREE.Vector3());
+    const delta = current.clone().sub(previousFollow);
     camera.position.add(delta);
     controls.target.add(delta);
-    previousFollow.copy(follow.position);
+    previousFollow.copy(current);
+  }
+  if (focusTarget && !animation) {
+    const center = focusTarget.object.getWorldPosition(new THREE.Vector3());
+    const delta = center.sub(controls.target).multiplyScalar(1 - Math.exp(-dt * 9));
+    camera.position.add(delta);
+    controls.target.add(delta);
+    if (delta.length() < 0.001) {
+      if (focusTarget.track) { follow = focusTarget.object; previousFollow = follow.getWorldPosition(new THREE.Vector3()); }
+      focusTarget = null;
+    }
   }
   controls.update();
+  updateContinuousZoom(now);
+  updateGalaxyAppearance();
   background.position.copy(camera.position);
   renderer.render(scene, camera);
   projectLabels();
@@ -584,13 +854,22 @@ function animate(now) {
 
 function closeDrawer() { $('destinations').classList.remove('open'); $('drawer-button').setAttribute('aria-expanded', 'false'); }
 function goUp() {
-  if (state.view === 'system') navigate('galaxy');
+  if (state.view === 'system' || state.view === 'blackhole') navigate('galaxy');
   else if (state.view === 'galaxy') navigate('cluster');
   else { state.sector = 0; state.galaxy = galaxiesInSector(0)[0]; state.star = starAt(state.galaxy, 0); navigate('cluster'); }
 }
 
 function bindEvents() {
-  document.querySelectorAll('[data-view]').forEach((button) => button.onclick = () => navigate(button.dataset.view));
+  // 이름표 위의 휠도 배경과 같은 확대 동작으로 전달한다.
+  $('labels').addEventListener('wheel', (event) => {
+    event.preventDefault();
+    renderer.domElement.dispatchEvent(new WheelEvent('wheel', {
+      deltaX: event.deltaX, deltaY: event.deltaY, deltaZ: event.deltaZ, deltaMode: event.deltaMode,
+      clientX: event.clientX, clientY: event.clientY, ctrlKey: event.ctrlKey,
+      shiftKey: event.shiftKey, altKey: event.altKey, metaKey: event.metaKey, bubbles: true, cancelable: true
+    }));
+  }, { passive: false });
+  document.querySelectorAll('[data-view]').forEach((button) => button.onclick = () => navigate(button.dataset.view === 'system' && state.selected?.type === 'blackhole' ? 'blackhole' : button.dataset.view));
   $('search').oninput = renderList;
   $('up-button').onclick = goUp;
   $('discover-button').onclick = () => {
@@ -609,7 +888,7 @@ function bindEvents() {
   $('pause-button').onclick = () => { state.paused = !state.paused; updateTimeUI(); };
   $('reverse-button').onclick = () => { state.direction *= -1; updateTimeUI(); };
   $('speed-slider').oninput = (event) => { state.speed = Number(event.target.value); updateTimeUI(); };
-  $('reset-time').onclick = () => { state.years = 0; updateCelestialPositions(); updateTimeUI(); toast('기준 시점으로 돌아왔습니다'); };
+  $('reset-time').onclick = () => { state.years = 0; viewEpoch = 0; updateCelestialPositions(); updateTimeUI(); toast('기준 시점으로 돌아왔습니다'); };
   $('orbit-button').onclick = () => {
     state.orbits = !state.orbits;
     if (orbitGroup) orbitGroup.visible = state.orbits;
@@ -624,13 +903,29 @@ function bindEvents() {
     try { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen(); }
     catch { toast('이 브라우저에서는 전체 화면을 사용할 수 없습니다'); }
   };
-  document.querySelector('.brand').onclick = (event) => { event.preventDefault(); state.sector = 0; state.galaxy = galaxiesInSector()[0]; state.star = starAt(state.galaxy, 0); navigate('galaxy'); };
+  document.querySelector('.brand').onclick = (event) => { event.preventDefault(); state.sector = 0; state.galaxy = galaxiesInSector()[0]; state.star = starAt(state.galaxy, 0); navigate('cluster'); };
+  for (const direction of [1, -1]) {
+    $(direction === 1 ? 'zoom-in' : 'zoom-out').onclick = () => {
+      animation = null;
+      controls.enabled = true;
+      const offset = camera.position.clone().sub(controls.target);
+      offset.setLength(THREE.MathUtils.clamp(offset.length() * (direction === 1 ? 0.65 : 1.54), controls.minDistance, controls.maxDistance));
+      camera.position.copy(controls.target).add(offset);
+      zoomDirection = direction;
+      zoomUntil = performance.now() + 900;
+    };
+  }
   addEventListener('keydown', (event) => {
     if (event.target.matches('input,button,select') || $('help-dialog').open) return;
     if (event.code === 'Space') { event.preventDefault(); state.paused = !state.paused; updateTimeUI(); }
     if (event.code === 'Escape') { closeDrawer(); goUp(); }
   });
   addEventListener('hashchange', parseRoute);
+  renderer.domElement.addEventListener('wheel', (event) => {
+    const now = performance.now();
+    zoomDirection = event.deltaY < 0 ? 1 : -1;
+    zoomUntil = now + 700;
+  }, { passive: true, capture: true });
   let down = null;
   renderer.domElement.addEventListener('pointerdown', (event) => { down = { x: event.clientX, y: event.clientY, id: event.pointerId }; closeDrawer(); });
   renderer.domElement.addEventListener('pointercancel', () => { down = null; });

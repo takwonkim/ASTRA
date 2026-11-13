@@ -123,3 +123,11 @@ export function orbitPosition(planet, years, radius = planet.au) {
 export function visualOrbit(index) { return 10 + index * 7 + index ** 1.25 * 1.2; }
 export function visualRadius(planet) { return 0.65 + Math.pow(planet.radius, 0.55) * 0.65; }
 export const planetKinds = { rock: '암석 행성', desert: '건조한 암석 행성', ocean: '해양형 행성', lava: '용암형 행성', gas: '가스 거성', ice: '얼음형 행성' };
+
+export function blackHoleIn(galaxy) {
+  const real = galaxy.id === 'milky-way';
+  const rng = random(`${galaxy.id}/black-hole`);
+  const mass = real ? 4e6 : Math.round(10 ** (6 + rng() * 2.5));
+  return { name: real ? '궁수자리 A*' : `${galaxy.name} 중심 블랙홀`, code: real ? 'Sgr A*' : 'AST-BH',
+    real, mass, radiusAU: mass * 2.95325 / 149597870.7, seed: `${galaxy.id}/black-hole` };
+}
