@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { cutawayShader } from './star-interior.js?v=9';
 
 const noise = `
   float hash3(vec3 p){p=fract(p*.3183099+vec3(.17,.31,.73));p*=17.;return fract(p.x*p.y*p.z*(p.x+p.y+p.z));}
@@ -20,6 +21,7 @@ export function createStarVisual(star, glow) {
   root.scale.setScalar(size);
   root.userData.radius = 3.5 * size;
   const time = { value: 0 };
+  const cutaway = { opening: { value: 0 }, cutDirection: { value: new THREE.Vector3(1, 0, 0) } };
   const isSun = star.real && star.seed === 'sol';
   const haloColor = isSun ? '#ffbf75' : star.color;
   const uniforms = { tint: { value: new THREE.Color(star.color) }, time, spotStrength: { value: ['M', 'K', 'G'].includes(star.type) ? 1 : .25 }, solarMap: { value: null }, solarAppearance: { value: 0 } };
@@ -28,11 +30,11 @@ export function createStarVisual(star, glow) {
     uniforms.solarMap.value.colorSpace = THREE.SRGBColorSpace;
   }
   const surface = new THREE.Mesh(new THREE.SphereGeometry(3.5, 64, 48), new THREE.ShaderMaterial({
-    uniforms,
+    uniforms: { ...uniforms, ...cutaway },
     vertexShader: `varying vec3 p;varying vec3 n;varying vec3 eye;varying vec2 surfaceUv;void main(){surfaceUv=uv;p=position/3.5;n=normalize(normalMatrix*normal);vec4 mv=modelViewMatrix*vec4(position,1.);eye=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}`,
-    fragmentShader: `${noise}
+    fragmentShader: `${noise}${cutawayShader}
       uniform vec3 tint;uniform float time;uniform float spotStrength;uniform sampler2D solarMap;uniform float solarAppearance;varying vec3 p;varying vec3 n;varying vec3 eye;varying vec2 surfaceUv;
-      void main(){vec3 flow=normalize(p)*120.+vec3(time*.18,0.,time*.12);
+      void main(){if(removed(p))discard;vec3 flow=normalize(p)*120.+vec3(time*.18,0.,time*.12);
         float detail=1.-smoothstep(.65,2.1,length(fwidth(p))*120.);
         float cells=detail>.01?granule(flow):.5;float fine=noise3(flow*2.8);float lanes=smoothstep(.15,.85,cells);
         float field=fbm(p*8.+vec3(0.,time*.015,0.));float belt=1.-smoothstep(.32,.65,abs(p.y));
@@ -49,14 +51,14 @@ export function createStarVisual(star, glow) {
   }));
   root.add(surface);
   const corona = new THREE.Mesh(new THREE.SphereGeometry(6.1, 48, 32), new THREE.ShaderMaterial({
-    uniforms: { tint: { value: new THREE.Color(haloColor) }, time }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.BackSide,
+    uniforms: { tint: { value: new THREE.Color(haloColor) }, time, opening: cutaway.opening }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.BackSide,
     vertexShader: 'varying vec3 n;varying vec3 eye;varying vec3 p;void main(){p=position;n=normalize(normalMatrix*normal);vec4 mv=modelViewMatrix*vec4(position,1.);eye=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}',
-    fragmentShader: `${noise} uniform vec3 tint;uniform float time;varying vec3 n;varying vec3 eye;varying vec3 p;
+    fragmentShader: `${noise} uniform vec3 tint;uniform float time;uniform float opening;varying vec3 n;varying vec3 eye;varying vec3 p;
       void main(){float mu=abs(dot(normalize(n),normalize(eye)));float r=sqrt(max(0.,1.-mu*mu))*6.1/3.5;
         vec3 direction=normalize(p);float plumes=pow(fbm(direction*18.+vec3(time*.025,0.,0.)),2.);
         float edge=smoothstep(.97,1.025,r)*exp(-max(0.,r-1.)*14.)*(1.-smoothstep(1.3,1.5,r));
         if(edge<.05)discard;
-        gl_FragColor=vec4(mix(tint,vec3(1.),.4)*2.2,edge*(.02+plumes*.35)*.35);
+        gl_FragColor=vec4(mix(tint,vec3(1.),.4)*2.2,edge*(.02+plumes*.35)*.35*(1.-opening));
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`
@@ -88,6 +90,7 @@ export function createStarVisual(star, glow) {
   }
   root.userData.surface = surface;
   root.userData.time = time;
+  root.userData.cutaway = cutaway;
   return root;
 }
 

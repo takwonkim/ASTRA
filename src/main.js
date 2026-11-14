@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STAR_COUNT, TAU, hash, random, galaxiesInSector, starAt, makeSystem, orbitPosition, visualOrbit, visualRadius, planetKinds, blackHoleIn } from './universe.js?v=3';
-import { createStarVisual, createBlackHoleVisual, createBlackHoleBackground, updateObjectVisual } from './objects.js?v=8';
+import { createStarVisual, createBlackHoleVisual, createBlackHoleBackground, updateObjectVisual } from './objects.js?v=9';
+import { attachStarInterior } from './star-interior.js?v=9';
+import { layerAtRadius, stellarZoomBoundary } from './star-model.js?v=9';
 import { DETAIL_SCALE, remapCamera, zoomBoundary } from './navigation.js?v=3';
 import { loadSkyCatalog, createSkyMode } from './sky.js?v=3';
 import { OBSERVERS, SKY_RATES, tonight, localDateInput, dateFromLocal } from './sky-math.js?v=3';
@@ -19,6 +21,7 @@ let renderer, opticalRenderer, scene, camera, controls, world, galaxyGroup, orbi
 let labels = [], pickables = [], planetMeshes = [], starSurface, animation = null, follow = null, previousFollow = null;
 let listItems = [], galaxyCatalog = galaxiesInSector(), lastFrame = 0, lastUI = 0, toastTimer, rebuilding = false;
 let preview = null, systemRoot = null, detailVisual = null, galaxyBlackHole = null, galaxyBackdrop = null;
+let interior = null;
 let focusTarget = null, scaleChanging = false, zoomUntil = 0, zoomDirection = 0, previousDistance = 0, zoomCooldown = 0;
 let viewEpoch = 0;
 let skyCatalog = null, skyMode = null, skyConfig = null, skySelection = null, lastSpaceHash = '', spacePaused = false, lastSkyFacts = 0, lastSkyList = 0;
@@ -155,6 +158,12 @@ function disposeWorld(root = world) {
 }
 
 function clearWorld() {
+  interior?.model.reset();
+  interior = null;
+  document.body.classList.remove('interior-mode');
+  $('interior-controls').hidden = true;
+  $('labels').hidden = false;
+  controls.enablePan = true;
   if (skyMode) { skyConfig = { observer: skyMode.state.observer, date: new Date(skyMode.state.time) }; skyMode.dispose(); skyMode = null; }
   document.body.classList.remove('sky-mode');
   $('sky-controls').hidden = true;
@@ -613,7 +622,7 @@ function setObject({ name, code, kind, real, color, type, description, metrics, 
   $('object-name').textContent = name;
   $('object-code').textContent = code;
   $('object-kind').textContent = kind;
-  $('object-badge').textContent = !real ? '생성 천체 · 시각적 재구성' : type === 'planet' ? '실제 천체 · 관측 기반 지도' : type === 'blackhole' ? '실제 천체 · 원반 재구성' : type === 'star' ? '실제 천체 · 표면 재구성' : '실제 천체 · 공간 재구성';
+  $('object-badge').textContent = type === 'layer' ? `${real ? '실제' : '생성'} 천체 · 내부 모형` : !real ? '생성 천체 · 시각적 재구성' : type === 'planet' ? '실제 천체 · 관측 기반 지도' : type === 'blackhole' ? '실제 천체 · 원반 재구성' : type === 'star' ? '실제 천체 · 표면 재구성' : '실제 천체 · 공간 재구성';
   $('object-badge').classList.toggle('real', real);
   $('object-art').className = `object-art ${type}`;
   $('object-art').style.setProperty('--art-color', color);
@@ -678,11 +687,85 @@ function selectCentralStar() {
   const star = state.star;
   setObject({ name: star.name, code: star.code, kind: `${star.type}형 · ${star.label}`, real: star.real, color: star.color, type: 'star',
     metrics: [['표면 온도', `${decimal.format(star.temperature)} K`], ['행성', `${state.planets.length}개`], ['항성 질량', `${star.mass} 태양질량`], ['모형', '케플러 공전']],
-    description: '행성을 선택해 가까이 다가가 보세요. 시간을 빠르게 돌리면 서로 다른 공전 주기가 보입니다.',
-    action: '행성계 전체 보기', onTravel: () => { follow = null; moveCamera([20, 76, 104]); } });
+    description: '행성을 선택하거나 별을 계속 확대해 내부를 둘러보세요. 내부 탐사에서는 핵융합 중심과 에너지 전달 층을 볼 수 있습니다.',
+    action: '별 내부 탐사', onTravel: () => startInterior() });
   updateRoute();
   controls.minDistance = detailVisual.userData.radius * 1.15;
   focusObject(starSurface);
+}
+
+function startInterior(fromZoom = false, layerId = 'core') {
+  if (state.view !== 'system' || interior?.active) return;
+  if (!interior) {
+    const model = attachStarInterior(detailVisual, state.star);
+    interior = { model, active: false, listItems, pickables };
+  }
+  for (const object of interior.model.pickables) object.userData.select = (hit) => selectInteriorLayer(object.userData.layer || interior.model.layerAtPoint(hit.point).id);
+  interior.active = true;
+  document.body.classList.add('interior-mode');
+  interior.model.setActive(true);
+  follow = previousFollow = focusTarget = animation = null;
+  controls.enabled = true;
+  controls.enablePan = false;
+  controls.target.set(0, 0, 0);
+  controls.minDistance = detailVisual.userData.radius * interior.model.profile.layers[0].radius * 2.6;
+  planetMeshes.forEach((entry) => { entry.group.visible = false; });
+  orbitGroup.visible = false;
+  $('labels').hidden = true;
+  $('interior-controls').hidden = false;
+  $('search').value = '';
+  listItems = [...interior.model.profile.layers].reverse().map((layer) => ({ name: layer.name, subtitle: layer.transport, color: layer.color, type: 'layer', key: layer.id, real: state.star.real, data: layer }));
+  pickables = interior.model.pickables;
+  updateHeadings();
+  selectInteriorLayer(layerId);
+  if (!fromZoom) {
+    const direction = camera.position.clone().normalize();
+    if (direction.lengthSq() === 0) direction.set(1, .35, 1).normalize();
+    moveCamera(direction.multiplyScalar(detailVisual.userData.radius * 3.8 * Math.max(1, 1 / camera.aspect)).toArray());
+  }
+  zoomUntil = 0;
+  zoomCooldown = performance.now() + 900;
+}
+
+function exitInterior(fromZoom = false) {
+  if (!interior?.active) return;
+  interior.active = false;
+  document.body.classList.remove('interior-mode');
+  interior.model.setActive(false);
+  follow = previousFollow = focusTarget = animation = null;
+  controls.enabled = true;
+  controls.enablePan = true;
+  controls.target.set(0, 0, 0);
+  planetMeshes.forEach((entry) => { entry.group.visible = true; });
+  orbitGroup.visible = state.orbits;
+  $('labels').hidden = false;
+  $('interior-controls').hidden = true;
+  $('search').value = '';
+  listItems = interior.listItems;
+  pickables = interior.pickables;
+  starSurface.userData.select = () => selectCentralStar();
+  updateHeadings();
+  selectCentralStar();
+  if (!fromZoom) moveCamera([20, 76, 104]);
+  zoomUntil = 0;
+  zoomCooldown = performance.now() + 900;
+}
+
+function selectInteriorLayer(id) {
+  if (!interior?.active) return;
+  const profile = interior.model.profile;
+  const layer = profile.layers.find((entry) => entry.id === id) || profile.layers[0];
+  interior.model.select(layer.id);
+  state.selected = { type: 'layer', key: layer.id };
+  const range = layer.id === 'photosphere' ? '표면 · 두께 강조' : !profile.sun ? '설명용 경계' : layer.id === 'core' ? '중심~약 25%' : layer.id === 'radiative' ? '약 25~70%' : '약 70~100%';
+  setObject({ name: layer.name, code: state.star.code, kind: `${state.star.name} · ${profile.family}`, real: state.star.real, color: layer.color, type: 'layer',
+    metrics: [['에너지 전달', layer.transport], ['반지름 구간', range], [profile.sun && layer.id === 'core' ? '중심 온도' : '항성 질량', profile.sun && layer.id === 'core' ? '약 1,500만 K' : `${state.star.mass} 태양질량`], ['표현', '설명용 3D 단면']],
+    description: `${layer.description} ${profile.note}. 내부의 색·움직임은 관측 영상이나 정밀 유체 계산이 아닙니다.`,
+    action: '이 층 가까이', onTravel: () => {
+      const distance = detailVisual.userData.radius * Math.max(profile.layers[0].radius * 3, layer.radius * 1.18);
+      moveCamera(camera.position.clone().normalize().multiplyScalar(distance).toArray());
+    } });
+  updateRoute();
 }
 
 function selectPlanet(planet, travel = false) {
@@ -732,6 +815,7 @@ function renderList() {
       if (state.view === 'sky') selectSkyConstellation(item.data);
       else if (state.view === 'cluster') selectGalaxy(item.data);
       else if (item.type === 'blackhole') selectBlackHole();
+      else if (item.type === 'layer') selectInteriorLayer(item.key);
       else if (state.view === 'galaxy') selectStar(item.data);
       else selectPlanet(item.data);
       closeDrawer();
@@ -765,6 +849,18 @@ function updateHeadings() {
   $('touch-hint').textContent = '한 손가락 회전 · 두 손가락 확대';
   document.querySelectorAll('[data-view]').forEach((button) => { const active = button.dataset.view === view || view === 'blackhole' && button.dataset.view === 'system'; button.classList.toggle('active', active); button.setAttribute('aria-current', active ? 'page' : 'false'); });
   document.querySelector('[data-view="system"]').innerHTML = '<span>03</span> 근접 관측';
+  if (interior?.active) {
+    $('scene-title').textContent = `${state.star.name}의 내부`;
+    $('scene-subtitle').textContent = interior.model.profile.note;
+    $('scene-count').textContent = `${interior.model.profile.layers.length}개 층 · 눌러서 탐사`;
+    $('scene-model').textContent = '주계열성 대표 구조 · 내부 모형';
+    $('list-title').textContent = '별의 내부 층';
+    $('up-button').textContent = '↖ 별 밖으로';
+    $('scale-level').textContent = '항성 내부 탐사';
+    $('orbit-button').disabled = true;
+    $('drawer-button').textContent = '☷ 내부 층';
+    $('touch-hint').textContent = '단면을 눌러 층 선택 · 확대해서 핵 가까이';
+  } else $('drawer-button').textContent = '☷ 목적지';
 }
 
 function navigate(view, fromHistory = false) {
@@ -860,6 +956,11 @@ function updateContinuousZoom(now) {
     else if (distance > previousDistance * 1.001) { zoomDirection = -1; zoomUntil = now + 700; }
     if (now < zoomUntil) {
       let next;
+      if (state.view === 'system' && (interior?.active || state.selected?.type === 'star')) {
+        const boundary = stellarZoomBoundary(!!interior?.active, camera.position.length() / detailVisual.userData.radius, zoomDirection, camera.aspect);
+        if (boundary) { boundary === 'inside' ? startInterior(true) : exitInterior(true); previousDistance = distance; return; }
+      }
+      if (interior?.active) { previousDistance = distance; return; }
       if (state.view === 'cluster') {
         const target = clusterGroups.get(state.galaxy.id);
         next = zoomBoundary('cluster', camera.position.distanceTo(target.position), zoomDirection, state.galaxy.size);
@@ -885,6 +986,7 @@ function updateRoute(replace = true) {
     if (skyMode.state.observer.id === 'custom') { params.set('lat', skyMode.state.observer.latitude); params.set('lon', skyMode.state.observer.longitude); }
   }
   if (state.view === 'system' && state.selected?.type === 'planet') params.set('planet', state.selected.key);
+  if (interior?.active) { params.set('inside', '1'); params.set('layer', state.selected.key); }
   const next = `#${params}`;
   if (location.hash !== next) history[replace ? 'replaceState' : 'pushState'](null, '', next);
 }
@@ -910,7 +1012,8 @@ function parseRoute() {
   }
   const selectedPlanet = params.has('planet') ? Number(params.get('planet')) : -1;
   navigate(view, true);
-  if (view === 'system' && Number.isInteger(selectedPlanet) && state.planets[selectedPlanet]) selectPlanet(state.planets[selectedPlanet]);
+  if (view === 'system' && params.get('inside') === '1') startInterior(false, params.get('layer') || 'core');
+  else if (view === 'system' && Number.isInteger(selectedPlanet) && state.planets[selectedPlanet]) selectPlanet(state.planets[selectedPlanet]);
 }
 
 function updateTimeUI() {
@@ -937,6 +1040,11 @@ function updateTimeUI() {
   const distance = camera.position.distanceTo(controls.target);
   const galaxyDistance = state.view === 'cluster' ? distance * 150 / state.galaxy.size : close ? distance * DETAIL_SCALE : distance;
   $('scale-level').textContent = `${close ? '근접 관측' : state.view === 'cluster' ? '은하 지도' : '은하 내부'} · ${readable(2500 / Math.max(.001, galaxyDistance), 1)}배`;
+  if (interior?.active) {
+    $('zoom-destination').textContent = '확대 → 별의 중심';
+    $('zoom-return').textContent = '축소 → 별 밖으로';
+    $('scale-level').textContent = '항성 내부 · 설명용 단면';
+  } else if (state.view === 'system' && state.selected?.type === 'star') $('zoom-destination').textContent = '확대 → 별 내부';
 }
 
 function updateGalaxyAppearance() {
@@ -1035,6 +1143,14 @@ function animate(now) {
   }
   controls.update();
   updateContinuousZoom(now);
+  if (interior) {
+    const motion = state.paused || reduceMotion || document.hidden ? 0 : dt * state.direction * 2 ** ((state.speed - 3) / 2);
+    interior.model.update(camera, reduceMotion ? 1 : dt, motion);
+    if (interior.active) {
+      const radius = camera.position.length() / detailVisual.userData.radius;
+      $('interior-depth').textContent = radius >= 1 ? '단면 전체 · 층을 눌러 탐사' : `내부 시점 · ${layerAtRadius(interior.model.profile, radius).name}`;
+    }
+  }
   updateGalaxyAppearance();
   background.position.copy(camera.position);
   if (state.view === 'system' || state.view === 'blackhole') opticalRenderer.render(scene, camera);
@@ -1045,7 +1161,8 @@ function animate(now) {
 
 function closeDrawer() { $('destinations').classList.remove('open'); $('drawer-button').setAttribute('aria-expanded', 'false'); $('drawer-backdrop').hidden = true; }
 function goUp() {
-  if (state.view === 'sky') { if (lastSpaceHash) location.hash = lastSpaceHash; else navigate('cluster'); }
+  if (interior?.active) exitInterior();
+  else if (state.view === 'sky') { if (lastSpaceHash) location.hash = lastSpaceHash; else navigate('cluster'); }
   else if (state.view === 'system' || state.view === 'blackhole') navigate('galaxy');
   else if (state.view === 'galaxy') navigate('cluster');
   else { state.sector = 0; state.galaxy = galaxiesInSector(0)[0]; state.star = starAt(state.galaxy, 0); navigate('cluster'); }
@@ -1054,7 +1171,9 @@ function goUp() {
 function bindEvents() {
   const input = $('scene-input');
   let labelPointer = null;
-  document.querySelectorAll('[data-view]').forEach((button) => button.onclick = () => navigate(button.dataset.view === 'system' && state.selected?.type === 'blackhole' ? 'blackhole' : button.dataset.view));
+  document.querySelectorAll('[data-view]').forEach((button) => button.onclick = () => interior?.active && button.dataset.view === 'system' ? exitInterior() : navigate(button.dataset.view === 'system' && state.selected?.type === 'blackhole' ? 'blackhole' : button.dataset.view));
+  $('interior-exit').onclick = () => exitInterior();
+  $('interior-overview').onclick = () => moveCamera(camera.position.clone().normalize().multiplyScalar(detailVisual.userData.radius * 3.8 * Math.max(1, 1 / camera.aspect)).toArray());
   $('search').oninput = renderList;
   $('up-button').onclick = goUp;
   $('sky-button').onclick = () => openEarthSky();
@@ -1100,7 +1219,7 @@ function bindEvents() {
   $('speed-slider').oninput = (event) => { state.speed = Number(event.target.value); updateTimeUI(); };
   $('reset-time').onclick = () => {
     if (skyMode) { skyMode.setObserver(OBSERVERS[0]); skyMode.setDate(tonight(OBSERVERS[0])); state.paused = true; refreshSky(); toast('서울의 오늘 밤 9시로 돌아왔습니다'); return; }
-    state.years = 0; viewEpoch = 0; updateCelestialPositions(); updateTimeUI(); toast('기준 시점으로 돌아왔습니다');
+    state.years = 0; viewEpoch = 0; interior?.model.resetTime(); updateCelestialPositions(); updateTimeUI(); toast('기준 시점으로 돌아왔습니다');
   };
   $('orbit-button').onclick = () => {
     if (skyMode) { skyMode.state.lines = !skyMode.state.lines; $('sky-lines').checked = skyMode.state.lines; updateSkyHeadings(); return; }
@@ -1135,6 +1254,7 @@ function bindEvents() {
   addEventListener('keydown', (event) => {
     if ($('help-dialog').open) return;
     if (event.code === 'Escape' && $('destinations').classList.contains('open')) { closeDrawer(); return; }
+    if (event.code === 'Escape' && interior?.active) { exitInterior(); return; }
     if (event.target.matches('input,button,select,textarea')) return;
     if (event.code === 'Space') { event.preventDefault(); state.paused = !state.paused; updateTimeUI(); }
     if (event.code === 'Escape') { closeDrawer(); goUp(); }
@@ -1163,7 +1283,7 @@ function bindEvents() {
     if (!hits.length) return;
     const hit = hits[0];
     if (hit.object.userData.galaxyStars && hit.index !== undefined) selectStar(starAt(state.galaxy, hit.index));
-    else hit.object.userData.select?.();
+    else hit.object.userData.select?.(hit);
   });
   renderer.domElement.addEventListener('webglcontextlost', (event) => { event.preventDefault(); showError('그래픽 연결이 중단되었습니다. 화면을 다시 열어 주세요.'); });
   const resize = () => { const width = $('app').clientWidth, height = $('app').clientHeight; camera.aspect = width / height; camera.updateProjectionMatrix(); renderer.setSize(width, height); };

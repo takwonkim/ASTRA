@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ASTRA 항성 내부 검수</title>
+<style>*{box-sizing:border-box}body{margin:0;color:#ddd;background:#04070d;font:13px system-ui}header{height:52px;padding:16px 24px;display:flex;justify-content:space-between}a{color:#d9c199}.grid{position:absolute;inset:52px 0 0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}.view{position:relative;border:1px solid #1b2736;touch-action:none}.view h2{position:absolute;left:24px;top:12px;font-size:17px;font-weight:400;pointer-events:none}.view p{position:absolute;left:24px;bottom:10px;color:#9aaec6;font-size:11px;pointer-events:none}canvas{position:fixed;inset:0;pointer-events:none}#status{font-size:11px;color:#8dbaab}</style>
+<script type="importmap">{"imports":{"three":"../vendor/three.module.min.js","three/addons/controls/OrbitControls.js":"../vendor/OrbitControls.js"}}</script>
+<header><span>ASTRA · 항성 내부 검수 <span id="status">로딩 중</span></span><a href="../index.html?v=9#view=system&inside=1">탐사 화면 열기 ↗</a></header>
+<div class="grid"><section class="view"></section><section class="view"></section><section class="view"></section><section class="view"></section></div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { createStarVisual } from '../src/objects.js?v=9';
+import { attachStarInterior } from '../src/star-interior.js?v=9';
+import { createOpticalRenderer } from '../src/optical-renderer.js?v=8';
+import { galaxiesInSector, starAt } from '../src/universe.js';
+const status=document.getElementById('status');let errors=0;
+const originalError=console.error;console.error=(...args)=>{errors++;status.title=args.map(String).join(' ');status.textContent=`오류 ${errors}개`;originalError(...args)};
+const galaxy=galaxiesInSector()[0],catalog=Array.from({length:300},(_,i)=>starAt(galaxy,i));
+const stars=[catalog[0],catalog.find(s=>s.mass<.35),catalog.find(s=>s.mass>=1.2&&s.mass<1.5),catalog.find(s=>s.mass>=3)];
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.setSize(innerWidth,innerHeight);renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.15;renderer.setScissorTest(true);document.body.prepend(renderer.domElement);
+const optical=createOpticalRenderer(renderer),views=[];
+const canvas=document.createElement('canvas');canvas.width=canvas.height=16;const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,16,16);const glow=new THREE.CanvasTexture(canvas);
+document.querySelectorAll('.view').forEach((element,index)=>{
+ const star=stars[index],scene=new THREE.Scene();scene.background=new THREE.Color('#04070d');
+ const visual=createStarVisual(star,glow),model=attachStarInterior(visual,star);scene.add(visual);model.setActive(true);
+ const camera=new THREE.PerspectiveCamera(42,1,.01,100);camera.position.set(0,visual.userData.radius*.8,visual.userData.radius*3.8);
+ if(attachStarInterior(visual,star)!==model)console.error('내부 모형이 중복 생성됨');
+ model.update(camera,1);model.reset();if(visual.userData.cutaway.opening.value!==0)console.error('외부 복귀 후 절단면이 남음');model.setActive(true);
+ const controls=new OrbitControls(camera,element);controls.enablePan=false;controls.minDistance=visual.userData.radius*.4;controls.maxDistance=visual.userData.radius*8;
+ const heading=document.createElement('h2');heading.textContent=`${star.name} · ${star.mass} 태양질량`;
+ const note=document.createElement('p');note.textContent=`${model.profile.family} · ${model.profile.layers.map(l=>l.name).join(' / ')}`;element.append(heading,note);
+ views.push({element,scene,camera,controls,model});
+});
+let last=0,frames=0,report=0;
+function frame(now){requestAnimationFrame(frame);const dt=Math.min(.06,(now-(last||now))/1000);last=now;
+ for(const v of views){const r=v.element.getBoundingClientRect();v.camera.aspect=r.width/r.height;v.camera.updateProjectionMatrix();v.controls.update();v.model.update(v.camera,dt);renderer.setViewport(r.left,innerHeight-r.bottom,r.width,r.height);renderer.setScissor(r.left,innerHeight-r.bottom,r.width,r.height);optical.render(v.scene,v.camera)}
+ frames++;if(now-report>1000){status.textContent=`렌더링 오류 ${errors}개 · ${Math.round(frames*1000/(now-report))}fps`;frames=0;report=now;}
+}requestAnimationFrame(frame);addEventListener('resize',()=>renderer.setSize(innerWidth,innerHeight));
+</script></html>

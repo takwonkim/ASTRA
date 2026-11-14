@@ -7,7 +7,7 @@
   <meta name="description" content="실제 우주에서 시작해 미지의 은하와 행성을 탐험하세요. 시간을 조절하며 나만의 항로를 만드는 3D 우주 탐사 시뮬레이터, ASTRA.">
   <title>ASTRA — 별 너머의 세계</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=5">
+  <link rel="stylesheet" href="./styles.css?v=9">
   <script type="importmap">{"imports":{"three":"./vendor/three.module.min.js","three/addons/controls/OrbitControls.js":"./vendor/OrbitControls.js"}}</script>
 </head>
 <body>
@@ -55,6 +55,7 @@
       <h1 id="scene-title">우리 은하<span>.</span></h1>
       <p id="scene-subtitle">익숙한 별에서, 아직 이름 없는 세계로.</p>
       <p id="touch-hint" class="touch-hint">한 손가락 회전 · 두 손가락 확대</p>
+      <div id="interior-controls" class="interior-controls" hidden><button id="interior-exit">↖ 별 밖으로</button><button id="interior-overview">전체 단면</button><span id="interior-depth">단면 전체 · 층을 눌러 탐사</span></div>
       <div class="scene-meta"><span id="scene-count">20,000개의 별</span><span class="divider"></span><span id="scene-model">회전 모형 · 공간 재구성</span></div>
     </section>
 
@@ -92,6 +93,7 @@
     <button id="close-help" class="icon-button dialog-close" aria-label="안내 닫기">×</button>
     <p class="dialog-eyebrow">ASTRA 관측 안내</p><h2>아는 우주에서,<br>상상하는 우주까지.</h2>
     <p><strong>천체를 클릭해 중심에 놓고 휠을 계속 확대</strong>해 보세요. 은하에서 별과 행성계까지 시야가 이어지고, 계속 축소하면 다시 은하 지도까지 돌아옵니다. 두 손가락 확대나 화면의 ＋·− 버튼도 사용할 수 있습니다. 은하 중심의 블랙홀도 같은 방법으로 탐사하세요.</p>
+    <p><strong>별 내부 탐사</strong>는 항성을 선택한 뒤 계속 확대하거나 정보 카드의 버튼으로 엽니다. 3D 단면의 층을 누르거나 내부 층 목록에서 선택하고, 더 확대해 핵 가까이까지 들어갈 수 있습니다. 축소하거나 ‘별 밖으로’를 누르면 행성계로 돌아옵니다. 질량에 따라 전체 대류형·태양형·대류핵 구조를 구분한 주계열성 대표 모형입니다. 태양 외의 경계 비율과 내부 색·움직임은 설명용이며 광구 두께는 강조했습니다. 내부 관측 영상이나 개별 항성의 정밀 계산은 아닙니다.</p>
     <div class="guide-grid"><div><strong>실제 천체</strong><p>우리 은하와 이웃 은하의 이름·형태, 태양계 행성의 기본 수치에 실제 자료를 사용합니다.</p></div><div><strong>생성 천체</strong><p>이름 없는 별과 외계 행성계는 주소를 바탕으로 생성합니다. 같은 주소에는 같은 세계가 나타납니다.</p></div></div>
     <p class="model-note">거리와 크기는 탐사를 위해 조정했습니다. 태양계도 실제 날짜의 위치가 아닌 예시 위치에서 움직입니다. 태양계 행성에는 관측 자료 기반 지도를 사용하며, 색 보정과 빈 영역 보완이 포함됩니다. 공전은 케플러 모형, 은하 회전은 단순 회전 모형입니다. 태양은 표면 구조를 드러내는 강조색 지도이며 가시광 자연색이나 현재 모습은 아닙니다. 다른 항성의 표면·홍염, 생성 행성의 지형과 위성은 시각적 재구성입니다. 지구의 구름 그림자·야간 도시 불빛과 토성의 고리 그림자를 표현하며 현재 관측 모습은 아닙니다. 행성 대기와 고리의 산란, 항성의 입상 구조·코로나와 근접 관측의 넓은 광채는 시각적 근사입니다. 주변 천체의 조명 세기와 원반 외곽 가스의 밝기는 관찰을 위해 보강했습니다. 궁수자리 A*의 질량은 실제 자료의 근삿값을 씁니다. 블랙홀은 비회전 슈바르츠실트 모형에서 광선을 수치 추적하며 원반 뒤쪽의 렌즈 효과와 중력·도플러 이동을 반영합니다. 원반은 얇고 불투명한 표면이며 가스 흐름 무늬·색·밝기는 관찰을 위한 재구성입니다. 유체 자체의 움직임과 부피 방출·흡수는 계산하지 않습니다. 회전하는 블랙홀의 시공간·플라스마·정밀 복사 전달은 계산하지 않습니다. 배경 별 지도에 렌즈 효과를 적용하며 다른 장면 물체 전체를 휘게 하지는 않습니다. 다른 은하의 블랙홀은 생성 천체입니다. 은하 충돌과 우주 진화는 계산하지 않습니다.</p>
     <p class="model-note">범위가 바뀌면 관측 경과 시간은 0부터 표시하고, 천체의 움직임은 이어집니다. 우주 탐사의 초기화는 시뮬레이션 전체를 예시 시작 시점으로 되돌립니다. 지구 하늘의 초기화는 서울·서울 현지 오늘 밤 9시·정지 상태로 복귀합니다. 관측 설정의 오늘 밤 9시는 현재 장소를 유지합니다.</p>
@@ -101,6 +103,6 @@
     <p class="sources">참고 자료 <a href="https://science.nasa.gov/solar-system/" target="_blank" rel="noopener">NASA 태양계</a><a href="https://ssd.jpl.nasa.gov/planets/phys_par.html" target="_blank" rel="noopener">JPL 행성 자료</a><a href="https://science.nasa.gov/universe/black-holes/" target="_blank" rel="noopener">NASA 블랙홀</a><a href="https://svs.gsfc.nasa.gov/14619" target="_blank" rel="noopener">강착원반 시각화</a><a href="https://github.com/ofrohn/d3-celestial" target="_blank" rel="noopener">XHIP·별자리 자료</a><a href="https://aa.usno.navy.mil/faq/alt_az" target="_blank" rel="noopener">관측 좌표 계산</a><a href="./data/NOTICE.txt" target="_blank" rel="noopener">별 자료 출처·라이선스</a><a href="./data/planets/NOTICE.txt" target="_blank" rel="noopener">행성 지도 출처·라이선스</a></p>
   </dialog>
   <noscript><div class="noscript">이 우주를 탐험하려면 브라우저에서 자바스크립트를 켜 주세요.</div></noscript>
-  <script type="module" src="./src/main.js?v=8"></script>
+  <script type="module" src="./src/main.js?v=9"></script>
 </body>
 </html>
