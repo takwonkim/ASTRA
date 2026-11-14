@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ASTRA 천체 외관 검수</title>
+<style>*{box-sizing:border-box}body{margin:0;color:#ddd;background:#04070d;font:13px system-ui}header{height:52px;padding:16px 24px;display:flex;justify-content:space-between}a{color:#d9c199}.grid{position:absolute;inset:52px 0 0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}.view{position:relative;border:1px solid #1b2736;touch-action:none}.view h2{position:absolute;left:24px;top:12px;font-size:17px;font-weight:400;pointer-events:none}.view p{position:absolute;left:24px;bottom:10px;color:#7d93ad;font-size:11px;pointer-events:none}canvas{position:fixed;inset:0;pointer-events:none}#status{font-size:11px;color:#8dbaab}</style>
+<script type="importmap">{"imports":{"three":"../vendor/three.module.min.js","three/addons/controls/OrbitControls.js":"../vendor/OrbitControls.js"}}</script>
+<header><span>ASTRA · 천체 외관 검수 <span id="status">자료 불러오는 중</span></span><a href="../index.html?v=6#view=system">탐사 화면 열기 ↗</a></header>
+<div class="grid"><section class="view"><h2>태양</h2><p>표면 강조색 지도 · 입상 구조 · 광채 / 드래그로 회전</p></section><section class="view"><h2>지구</h2><p>지표 · 구름 · 바다 반사 · 낮과 밤</p></section><section class="view"><h2>목성</h2><p>관측 기반 지도 · 띠 · 편평한 형태</p></section><section class="view"><h2>토성</h2><p>고리의 밀도와 틈 · 자전축 기울기</p></section></div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { createStarVisual, updateObjectVisual } from '../src/objects.js?v=6';
+import { createPlanetVisual, STARLIGHT_INTENSITY } from '../src/planet-visual.js?v=5';
+import { galaxiesInSector, starAt, makeSystem } from '../src/universe.js';
+import { solarMapFor } from '../src/planet-maps.js';
+const status=document.getElementById('status');let errors=0;
+const originalError=console.error;console.error=(...args)=>{errors++;status.textContent=`오류 ${errors}개`;originalError(...args)};
+THREE.DefaultLoadingManager.onLoad=()=>{status.textContent=errors?`오류 ${errors}개`:'지도 로딩 완료 · 렌더링 오류 0개'};
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.setSize(innerWidth,innerHeight);renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.15;renderer.setScissorTest(true);document.body.prepend(renderer.domElement);
+const sun=starAt(galaxiesInSector()[0],0),planets=makeSystem(sun),views=[];
+function glow(){const c=document.createElement('canvas');c.width=c.height=128;const ctx=c.getContext('2d'),g=ctx.createRadialGradient(64,64,0,64,64,64);for(const [t,a]of[[0,1],[.08,.95],[.25,.3],[.55,.065],[1,0]])g.addColorStop(t,`rgba(255,255,255,${a})`);ctx.fillStyle=g;ctx.fillRect(0,0,128,128);return new THREE.CanvasTexture(c)}
+document.querySelectorAll('.view').forEach((element,index)=>{
+ const scene=new THREE.Scene();scene.background=new THREE.Color('#04070d');const camera=new THREE.PerspectiveCamera(42,1,.01,100);camera.position.set(...(index===0?[0,.7,13]:index===3?[0,1.8,5.6]:[0,.4,4.1]));
+ const controls=new OrbitControls(camera,element);controls.enablePan=false;controls.enableDamping=true;
+ const light=new THREE.PointLight('#fff8ee',STARLIGHT_INTENSITY,0,0);light.position.set(5,2,4);scene.add(light,new THREE.AmbientLight('#b9c6dd',.055));
+ let star;if(index===0){star=createStarVisual(sun,glow());scene.add(star)}else{const planet=planets[[0,2,4,5][index]],map=solarMapFor(planet),texture=new THREE.TextureLoader().load(`../data/planets/${map.file}`);texture.colorSpace=THREE.SRGBColorSpace;texture.anisotropy=4;const visual=createPlanetVisual({planet,radius:1,surface:texture,light,anisotropy:4});visual.mesh.rotation.y=index===1?.9:2.1;scene.add(visual.root)}
+ views.push({element,scene,camera,controls,star});
+});
+function frame(now){requestAnimationFrame(frame);for(const v of views){const r=v.element.getBoundingClientRect();v.camera.aspect=r.width/r.height;v.camera.updateProjectionMatrix();v.controls.update();if(v.star)updateObjectVisual(v.star,now*.02,v.camera);renderer.setViewport(r.left,innerHeight-r.bottom,r.width,r.height);renderer.setScissor(r.left,innerHeight-r.bottom,r.width,r.height);renderer.render(v.scene,v.camera)}}requestAnimationFrame(frame);
+addEventListener('resize',()=>renderer.setSize(innerWidth,innerHeight));
+</script></html>

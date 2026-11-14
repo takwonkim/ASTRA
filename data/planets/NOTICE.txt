@@ -1,0 +1,46 @@
+ASTRA solar-system planet maps
+
+Attribution: Solar System Scope / INOVE
+Source page: https://play.solarsystemscope.com/textures/
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+https://creativecommons.org/licenses/by/4.0/
+Downloaded 2026-11-14. Original 2K JPEG files are unmodified.
+ASTRA maps these images onto spheres with simulated lighting and rotation.
+Individual source URLs, byte sizes and SHA-256 hashes: sources.json
+
+The provider describes these maps as based on NASA elevation and imagery,
+with colors adjusted using Messenger, Viking, Cassini and Hubble photographs.
+Its Earth map combines geodata and NASA Blue Marble imagery.
+The provider notes that unmapped gaps contain fictional fill, colors are
+more saturated, and the Earth vegetation/snow coverage is seasonal.
+These are processed visual reconstructions, not raw or live observations.
+
+Mercury: 2k_mercury.jpg -- surface map.
+Venus: 2k_venus_atmosphere.jpg -- visible cloud appearance, not radar ground.
+Earth: 2k_earth_daymap.jpg -- daylight land/ocean map.
+Mars: 2k_mars.jpg -- surface map.
+Jupiter, Saturn, Uranus, Neptune: corresponding 2k_<planet>.jpg -- atmospheric
+appearance; these do not show a solid surface or current cloud positions.
+Detail maps added for rendering:
+- 2k_earth_clouds.jpg: cloud opacity layer, not current weather.
+- 2k_earth_normal_map.png: terrain normals; converted from the provider's
+  original 2k_earth_normal_map.tif to PNG, preserving pixel dimensions.
+- 2k_earth_specular_map.png: ocean reflectivity; converted from the provider's
+  original 2k_earth_specular_map.tif to PNG, preserving pixel dimensions.
+- 2k_saturn_ring_alpha.png: radial ring color/opacity, mapped to an annulus.
+- 2k_sun.jpg: solar appearance map used in enhanced colors, not a true-color
+  photograph of the visible photosphere or current solar activity.
+These detail maps have the same provider and CC BY 4.0 license as above.
+Original and converted hashes and processing notes are in sources.json.
+All moons remain ASTRA's separate visual approximations.
+
+Earth/Saturn axial tilt references:
+https://science.nasa.gov/earth/facts/
+https://science.nasa.gov/saturn/facts/
+Approximate polar/equatorial shape ratios use the cube of the published
+mean/equatorial radius ratio, rounded for illustration:
+https://ssd.jpl.nasa.gov/planets/phys_par.html
+The displayed axis orientations are illustrative, not date-specific.
+Atmospheric rim light, ring scattering and exposure are visual approximations.
+
+Generated exoplanets continue to use ASTRA's procedural textures.

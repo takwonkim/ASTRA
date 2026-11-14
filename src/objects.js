@@ -14,36 +14,57 @@ export function createStarVisual(star, glow) {
   root.scale.setScalar(size);
   root.userData.radius = 3.5 * size;
   const time = { value: 0 };
+  const isSun = star.real && star.seed === 'sol';
+  const haloColor = isSun ? '#ffbf75' : star.color;
+  const uniforms = { tint: { value: new THREE.Color(star.color) }, time, spotStrength: { value: ['M', 'K', 'G'].includes(star.type) ? 1 : .25 }, solarMap: { value: null }, solarAppearance: { value: 0 } };
+  if (isSun) {
+    uniforms.solarMap.value = new THREE.TextureLoader().load(new URL('../data/planets/2k_sun.jpg', import.meta.url).href, () => { uniforms.solarAppearance.value = 1; });
+    uniforms.solarMap.value.colorSpace = THREE.SRGBColorSpace;
+  }
   const surface = new THREE.Mesh(new THREE.SphereGeometry(3.5, 64, 48), new THREE.ShaderMaterial({
-    uniforms: { tint: { value: new THREE.Color(star.color) }, time },
-    vertexShader: `varying vec3 p;varying vec3 n;varying vec3 eye;void main(){p=position/3.5;n=normalize(normalMatrix*normal);vec4 mv=modelViewMatrix*vec4(position,1.);eye=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}`,
+    uniforms,
+    vertexShader: `varying vec3 p;varying vec3 n;varying vec3 eye;varying vec2 surfaceUv;void main(){surfaceUv=uv;p=position/3.5;n=normalize(normalMatrix*normal);vec4 mv=modelViewMatrix*vec4(position,1.);eye=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}`,
     fragmentShader: `${noise}
-      uniform vec3 tint;uniform float time;varying vec3 p;varying vec3 n;varying vec3 eye;
-      void main(){vec3 flow=p*24.+vec3(time*.12,0.,time*.08);float granules=noise3(flow);float cells=fbm(flow*1.7);
-        float spots=smoothstep(.68,.8,fbm(p*7.+vec3(0.,time*.025,0.)));
-        float limb=.4+.6*pow(max(dot(normalize(n),normalize(eye)),0.),.38);
-        vec3 color=tint*(.72+granules*.48+cells*.35)*(1.-spots*.82)*limb;
+      uniform vec3 tint;uniform float time;uniform float spotStrength;uniform sampler2D solarMap;uniform float solarAppearance;varying vec3 p;varying vec3 n;varying vec3 eye;varying vec2 surfaceUv;
+      void main(){vec3 flow=normalize(p)*72.+vec3(time*.18,0.,time*.12);
+        float cells=noise3(flow);float fine=noise3(flow*2.8);float lanes=smoothstep(.28,.62,cells);
+        float field=fbm(p*8.+vec3(0.,time*.015,0.));float belt=1.-smoothstep(.32,.65,abs(p.y));
+        float penumbra=smoothstep(.65,.74,field)*belt;float umbra=smoothstep(.74,.79,field)*belt;
+        float limb=.34+.66*pow(max(dot(normalize(n),normalize(eye)),0.),.42);
+        float detail=1.-smoothstep(.7,2.2,length(fwidth(p))*72.);
+        float grain=mix(1.58,1.2+lanes*.68+fine*.12,detail);
+        vec3 hot=mix(tint,vec3(1.),.24);vec3 color=hot*grain*(1.-(penumbra*.48+umbra*.24)*spotStrength)*limb;
+        if(solarAppearance>.5)color=texture2D(solarMap,surfaceUv).rgb*2.6*(.78+.22*lanes)*limb;
         gl_FragColor=vec4(color,1.);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`
   }));
   root.add(surface);
-  const corona = new THREE.Mesh(new THREE.SphereGeometry(3.68, 48, 32), new THREE.ShaderMaterial({
-    uniforms: { tint: { value: new THREE.Color(star.color) }, time }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.BackSide,
+  const corona = new THREE.Mesh(new THREE.SphereGeometry(4.4, 48, 32), new THREE.ShaderMaterial({
+    uniforms: { tint: { value: new THREE.Color(haloColor) }, time }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.BackSide,
     vertexShader: 'varying vec3 n;varying vec3 eye;varying vec3 p;void main(){p=position;n=normalize(normalMatrix*normal);vec4 mv=modelViewMatrix*vec4(position,1.);eye=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}',
-    fragmentShader: `${noise} uniform vec3 tint;uniform float time;varying vec3 n;varying vec3 eye;varying vec3 p;void main(){float rim=pow(1.-abs(dot(normalize(n),normalize(eye))),3.);float plasma=.25+fbm(p*3.+time*.02);gl_FragColor=vec4(tint*1.5,rim*plasma*.3);}`
+    fragmentShader: `${noise} uniform vec3 tint;uniform float time;varying vec3 n;varying vec3 eye;varying vec3 p;
+      void main(){float mu=abs(dot(normalize(n),normalize(eye)));float r=sqrt(max(0.,1.-mu*mu))*4.4/3.5;
+        float edge=1.-smoothstep(1.,1.25,r);float plasma=.8+.2*fbm(p*9.+time*.025);
+        gl_FragColor=vec4(tint*1.8,edge*plasma*.28);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`
   }));
   root.add(corona);
-  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: star.color, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
-  halo.scale.set(23, 23, 1);
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: haloColor, transparent: true, opacity: .9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+  halo.scale.set(24, 24, 1);
   root.add(halo);
-  for (let i = 0; i < 2; i++) {
+  const outer = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: haloColor, transparent: true, opacity: .065, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+  outer.scale.set(48, 48, 1);
+  root.add(outer);
+  for (let i = 0; i < 4; i++) {
     const points = Array.from({ length: 25 }, (_, j) => {
       const t = j / 24 * Math.PI;
-      return new THREE.Vector3(Math.cos(t) * 0.68, 3.39 + Math.sin(t) * 0.8, 0);
+      return new THREE.Vector3(Math.cos(t) * (.4 + i * .07), 3.43 + Math.sin(t) * (.36 + i * .1), 0);
     });
-    const loop = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), 32, 0.018, 5, false), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ff6b24').lerp(new THREE.Color(star.color), .25), transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
+    const loop = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), 32, .012, 5, false), new THREE.MeshBasicMaterial({ color: new THREE.Color('#ff853a').lerp(new THREE.Color(star.color), .4), transparent: true, opacity: .45, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
     loop.rotation.set(i * 2.1, i * 1.7, i * 2.4);
     root.add(loop);
   }
@@ -52,59 +73,8 @@ export function createStarVisual(star, glow) {
   return root;
 }
 
-export function createBlackHoleVisual() {
-  const root = new THREE.Group();
-  const time = { value: 0 };
-  const shadow = new THREE.Mesh(new THREE.SphereGeometry(3.45, 64, 48), new THREE.MeshBasicMaterial({ color: '#000000' }));
-  root.add(shadow);
-  const disk = new THREE.Mesh(new THREE.RingGeometry(4.8, 19, 160, 16), new THREE.ShaderMaterial({
-    uniforms: { time }, transparent: true, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending,
-    vertexShader: 'varying vec3 p;varying vec3 eye;void main(){p=position;eye=cameraPosition;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
-    fragmentShader: `${noise}
-      uniform float time;varying vec3 p;varying vec3 eye;
-      void main(){float r=length(p.xy);float a=atan(p.y,p.x);float spin=time*4./pow(r*.18,1.5);
-        vec3 turbulence=vec3(cos(a-spin)*r*.7,sin(a-spin)*r*.7,r*1.4);
-        float filaments=(.65+.35*fbm(turbulence*3.))*(.85+.15*sin(r*10.+fbm(turbulence)*18.));
-        float edge=smoothstep(4.8,5.8,r)*(1.-smoothstep(12.,19.,r));
-        float heat=pow(5./r,.85);float beam=.68+.55*cos(a-.4);
-        vec3 color=mix(vec3(.75,.12,.015),vec3(1.,.62,.22),heat);
-        color=mix(color,vec3(1.,.9,.67),smoothstep(.72,1.,heat));
-        float intensity=filaments*beam*(.7+fbm(turbulence*2.))*pow(heat,1.4);
-        gl_FragColor=vec4(color*intensity*3.2,edge*.85);
-        #include <tonemapping_fragment>
-        #include <colorspace_fragment>
-      }`
-  }));
-  disk.rotation.x = -Math.PI / 2;
-  root.add(disk);
-  const lens = new THREE.Group();
-  const arcMaterial = () => new THREE.ShaderMaterial({
-    uniforms: { time, strength: { value: .7 } }, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-    vertexShader: 'varying vec3 p;varying vec3 n;varying vec3 eye;varying vec2 vUv;void main(){p=position;n=normalize(normalMatrix*normal);vUv=uv;vec4 mv=modelViewMatrix*vec4(position,1.);eye=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}',
-    fragmentShader: `${noise} uniform float time;uniform float strength;varying vec3 p;varying vec3 n;varying vec3 eye;varying vec2 vUv;void main(){float edge=pow(abs(dot(normalize(n),normalize(eye))),1.8);float ends=smoothstep(0.,.08,vUv.x)*(1.-smoothstep(.92,1.,vUv.x));float cloud=.65+.35*fbm(p*3.+time*.1);gl_FragColor=vec4(vec3(1.,.65,.28)*cloud*1.5,edge*ends*strength);}`
-  });
-  const photon = new THREE.Mesh(new THREE.TorusGeometry(3.73, 0.05, 8, 160), new THREE.MeshBasicMaterial({ color: '#ffe0a4', transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
-  const arch = new THREE.Mesh(new THREE.TorusGeometry(5.3, 0.55, 16, 128, Math.PI), arcMaterial());
-  arch.scale.y = 0.9;
-  const lower = new THREE.Mesh(new THREE.TorusGeometry(4.15, 0.17, 12, 128, Math.PI), arcMaterial());
-  lower.rotation.z = Math.PI;
-  lower.scale.y = 0.8;
-  lens.add(photon, arch, lower);
-  root.add(lens);
-  root.userData.surface = shadow;
-  root.userData.time = time;
-  root.userData.lens = lens;
-  root.userData.arcs = [arch, lower];
-  return root;
-}
+export { createBlackHoleVisual, createBlackHoleBackground } from './black-hole-visual.js?v=6';
 
-export function updateObjectVisual(root, days, camera) {
+export function updateObjectVisual(root, days) {
   root.userData.time.value = (days % 1000) * 0.04;
-  if (root.userData.lens) {
-    const rotation = root.getWorldQuaternion(new THREE.Quaternion()).invert();
-    root.userData.lens.quaternion.copy(rotation.multiply(camera.quaternion));
-    const direction = camera.position.clone().sub(root.getWorldPosition(new THREE.Vector3())).normalize();
-    direction.applyQuaternion(root.getWorldQuaternion(new THREE.Quaternion()).invert());
-    for (const arc of root.userData.arcs) arc.material.uniforms.strength.value = .7 * (1 - direction.y ** 2);
-  }
 }
