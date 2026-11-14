@@ -1,20 +1,21 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STAR_COUNT, TAU, hash, random, galaxiesInSector, starAt, makeSystem, orbitPosition, visualOrbit, visualRadius, planetKinds, blackHoleIn } from './universe.js?v=3';
-import { createStarVisual, createBlackHoleVisual, createBlackHoleBackground, updateObjectVisual } from './objects.js?v=6';
+import { createStarVisual, createBlackHoleVisual, createBlackHoleBackground, updateObjectVisual } from './objects.js?v=7';
 import { DETAIL_SCALE, remapCamera, zoomBoundary } from './navigation.js?v=3';
 import { loadSkyCatalog, createSkyMode } from './sky.js?v=3';
 import { OBSERVERS, SKY_RATES, tonight, localDateInput, dateFromLocal } from './sky-math.js?v=3';
 import { createTapTracker } from './tap.js?v=4';
 import { solarMapFor } from './planet-maps.js?v=4';
-import { createPlanetVisual, STARLIGHT_INTENSITY } from './planet-visual.js?v=5';
+import { createPlanetVisual, STARLIGHT_INTENSITY } from './planet-visual.js?v=7';
+import { createOpticalRenderer } from './optical-renderer.js?v=7';
 
 const $ = (id) => document.getElementById(id);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const state = { view: 'galaxy', sector: 0, galaxy: null, star: null, planets: [], selected: null, years: 0, paused: false, direction: 1, speed: 3, orbits: true };
 const speeds = { galaxy: [1e3, 1e4, 1e5, 1e6, 1e7, 5e7, 1e8], cluster: [1e3, 1e4, 1e5, 1e6, 1e7, 5e7, 1e8], system: [0.01, 0.1, 1, 10, 100, 1000, 10000].map((days) => days / 365.25) };
 speeds.blackhole = [0.0001, 0.001, 0.01, 0.1, 1, 10, 100].map((days) => days / 365.25);
-let renderer, scene, camera, controls, world, galaxyGroup, orbitGroup, background, backgroundMap;
+let renderer, opticalRenderer, scene, camera, controls, world, galaxyGroup, orbitGroup, background, backgroundMap;
 let labels = [], pickables = [], planetMeshes = [], starSurface, animation = null, follow = null, previousFollow = null;
 let listItems = [], galaxyCatalog = galaxiesInSector(), lastFrame = 0, lastUI = 0, toastTimer, rebuilding = false;
 let preview = null, systemRoot = null, detailVisual = null, galaxyBlackHole = null, galaxyBackdrop = null;
@@ -145,7 +146,7 @@ function disposeWorld(root = world) {
   root.traverse((object) => {
     object.geometry?.dispose();
     for (const material of [object.material].flat().filter(Boolean)) {
-      for (const texture of [material.map, material.normalMap, material.specularMap, material.alphaMap, ...Object.values(material.uniforms || {}).map((uniform) => uniform.value)]) if (texture?.isTexture && texture !== glow && texture !== backgroundMap) textures.add(texture);
+      for (const texture of [material.map, material.normalMap, material.specularMap, material.alphaMap, material.emissiveMap, material.bumpMap, ...Object.values(material.uniforms || {}).map((uniform) => uniform.value)]) if (texture?.isTexture && texture !== glow && texture !== backgroundMap) textures.add(texture);
       material.dispose();
     }
   });
@@ -307,8 +308,8 @@ function surfaceTexture(planet) {
     return texture;
   }
   const canvas = document.createElement('canvas');
-  canvas.width = 384;
-  canvas.height = 192;
+  canvas.width = 512;
+  canvas.height = 256;
   const ctx = canvas.getContext('2d');
   const image = ctx.createImageData(canvas.width, canvas.height);
   const rng = random(planet.seed);
@@ -316,6 +317,7 @@ function surfaceTexture(planet) {
   const base = new THREE.Color(planet.color);
   const land = new THREE.Color(planet.kind === 'ocean' ? '#72896b' : '#b29a7e');
   const light = new THREE.Color('#e8e3d3');
+  const encoded = new THREE.Color();
   for (let y = 0; y < canvas.height; y++) {
     const lat = y / canvas.height * Math.PI;
     for (let x = 0; x < canvas.width; x++) {
@@ -328,7 +330,7 @@ function surfaceTexture(planet) {
       }
       const color = base.clone();
       if (planet.kind === 'gas') {
-        const bands = Math.sin(lat * 42 + noise * 2) * 0.5 + 0.5;
+        const bands = Math.sin(lat * 42 + Math.sin(lon * 3 + phases[0]) * .7 + noise * 4) * 0.5 + 0.5;
         color.lerp(light, bands * 0.4).multiplyScalar(0.65 + bands * 0.4);
       } else if (planet.kind === 'ocean') {
         if (noise > 0.05) color.lerp(land, 0.85).multiplyScalar(0.75 + noise * 0.25);
@@ -341,9 +343,10 @@ function surfaceTexture(planet) {
         if (Math.abs(noise) < 0.04) color.set('#ffb350');
       } else color.multiplyScalar(0.65 + (noise + 1) * 0.23);
       const pixel = (y * canvas.width + x) * 4;
-      image.data[pixel] = Math.min(255, color.r * 255);
-      image.data[pixel + 1] = Math.min(255, color.g * 255);
-      image.data[pixel + 2] = Math.min(255, color.b * 255);
+      color.getRGB(encoded, THREE.SRGBColorSpace);
+      image.data[pixel] = Math.min(255, encoded.r * 255);
+      image.data[pixel + 1] = Math.min(255, encoded.g * 255);
+      image.data[pixel + 2] = Math.min(255, encoded.b * 255);
       image.data[pixel + 3] = 255;
     }
   }
@@ -652,7 +655,7 @@ function selectBlackHole() {
   state.selected = { type: 'blackhole', key: 'blackhole' };
   setObject({ name: hole.name, code: hole.code, kind: '초대질량 블랙홀', real: hole.real, color: '#f2ad5f', type: 'blackhole',
     metrics: [['질량', `${readable(hole.mass)} 태양질량`], ['지평선 반지름¹', `${decimal.format(hole.radiusAU)} AU`], ['관측 구조', '그림자 · 강착원반'], ['표현', '비회전 광선 추적']],
-    description: hole.real ? '우리 은하 중심의 실제 블랙홀. 비회전 모형에서 빛의 경로를 계산합니다. 얇은 강착원반의 색·밝기는 구조를 볼 수 있게 재구성한 것으로 실제 촬영 모습은 아닙니다. ¹비회전 모형 기준.' : '탐험을 위해 생성한 중심 블랙홀입니다. 비회전 모형의 빛 경로와 얇은 강착원반을 사용합니다. 색·밝기는 시각화용 재구성입니다. ¹비회전 모형 기준.',
+    description: hole.real ? '우리 은하 중심의 실제 블랙홀. 비회전 모형에서 빛의 경로를 계산합니다. 얇은 강착원반의 가스 무늬·색·밝기는 구조를 볼 수 있게 재구성한 것입니다. ¹비회전 모형 기준.' : '탐험을 위해 생성한 중심 블랙홀입니다. 비회전 모형의 빛 경로와 얇은 강착원반을 사용합니다. 색·밝기는 시각화용 재구성입니다. ¹비회전 모형 기준.',
     action: state.view === 'blackhole' ? '강착원반 가까이 보기' : '블랙홀 관찰',
     onTravel: () => state.view === 'blackhole' ? moveCamera([0, 7, 25]) : navigate('blackhole') });
   updateRoute();
@@ -1034,7 +1037,8 @@ function animate(now) {
   updateContinuousZoom(now);
   updateGalaxyAppearance();
   background.position.copy(camera.position);
-  renderer.render(scene, camera);
+  if (state.view === 'system' || state.view === 'blackhole') opticalRenderer.render(scene, camera);
+  else renderer.render(scene, camera);
   projectLabels();
   if (now - lastUI > 150) { updateTimeUI(); lastUI = now; }
 }
@@ -1176,6 +1180,7 @@ try {
   renderer.setClearColor('#04070d');
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.15;
+  opticalRenderer = createOpticalRenderer(renderer);
   $('viewport').append(renderer.domElement);
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(49, $('app').clientWidth / $('app').clientHeight, 0.05, 9000);

@@ -22,10 +22,10 @@ test('태양계 8개 지도는 출처 파일과 일치하고 생성 행성에는
   for (const planet of makeSystem(starAt(galaxy, 123))) assert.equal(solarMapFor(planet), null);
 });
 
-test('구름·지형·반사·고리·태양 지도 파일은 기록된 해시와 일치한다', async () => {
+test('구름·지형·반사·고리·태양·야간 지도 파일은 기록된 해시와 일치한다', async () => {
   const root = new URL('../data/planets/', import.meta.url);
   const sources = JSON.parse(await readFile(new URL('sources.json', root)));
-  assert.equal(sources.detail_maps.length, 5);
+  assert.equal(sources.detail_maps.length, 6);
   for (const source of sources.detail_maps) {
     const bytes = await readFile(new URL(source.file, root));
     assert.equal(createHash('sha256').update(bytes).digest('hex'), source.sha256);

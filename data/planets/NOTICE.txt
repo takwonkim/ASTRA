@@ -22,6 +22,7 @@ Mars: 2k_mars.jpg -- surface map.
 Jupiter, Saturn, Uranus, Neptune: corresponding 2k_<planet>.jpg -- atmospheric
 appearance; these do not show a solid surface or current cloud positions.
 Detail maps added for rendering:
+- 2k_earth_nightmap.jpg: processed night-side lights, not current city lights.
 - 2k_earth_clouds.jpg: cloud opacity layer, not current weather.
 - 2k_earth_normal_map.png: terrain normals; converted from the provider's
   original 2k_earth_normal_map.tif to PNG, preserving pixel dimensions.
@@ -41,6 +42,8 @@ Approximate polar/equatorial shape ratios use the cube of the published
 mean/equatorial radius ratio, rounded for illustration:
 https://ssd.jpl.nasa.gov/planets/phys_par.html
 The displayed axis orientations are illustrative, not date-specific.
-Atmospheric rim light, ring scattering and exposure are visual approximations.
+Atmospheric single scattering, cloud/ring shadows, night-light intensity, ring
+scattering and exposure are visual approximations. HDR bloom represents a subtle
+camera response; it is not gas surrounding planets.
 
 Generated exoplanets continue to use ASTRA's procedural textures.

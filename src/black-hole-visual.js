@@ -42,15 +42,18 @@ export function createBlackHoleVisual(backgroundMap = null) {
         float r=areal(length(p)),a=atan(p.z,p.x),beta=sqrt(1./(2.*(r-1.)));
         vec3 tangent=normalize(vec3(-p.z,0.,p.x));
         float shift=sqrt(1.-1./r)*sqrt(1.-beta*beta)/(1.+beta*dot(tangent,d));
-        float phase=a-time*70./pow(r,1.5);
-        vec3 flow=vec3(cos(phase),sin(phase),r*.3);
-        float turbulence=.58+.28*noise3(flow*9.)+.14*noise3(flow*23.);
-        float threads=.98+.02*sin(r*24.+noise3(flow*4.)*10.);
+        float phase=a-time*70./pow(r,1.5)+log(r)*.8;
+        vec3 flow=vec3(cos(phase)*r,sin(phase)*r,r*.6);
+        float warp=noise3(flow*.35)*.8;
+        float broad=noise3(flow*.8+warp),fine=noise3(flow*3.2+broad);
+        float turbulence=.4+1.5*smoothstep(.15,.9,broad*.8+fine*.2);
+        float threads=.9+.1*sin(r*9.+warp*4.+noise3(flow*.9)*12.);
         float flux=pow(${BH.inner.toFixed(1)}/r,3.)*(1.-sqrt(${BH.inner.toFixed(1)}/r))/.057;
         float heat=pow(max(flux,0.),.25)*shift;
-        vec3 color=mix(vec3(.65,.075,.008),vec3(1.,.42,.09),smoothstep(.25,.8,heat));
-        color=mix(color,vec3(1.,.86,.59),smoothstep(.8,1.4,heat));
-        float intensity=3.4*flux*pow(shift,3.)*turbulence*threads;
+        vec3 color=mix(vec3(.48,.055,.009),vec3(1.,.46,.16),smoothstep(.2,.8,heat));
+        color=mix(color,vec3(1.,.91,.78),smoothstep(.72,1.3,heat));
+        float intensity=3.8*flux*pow(shift,3.)*turbulence*threads;
+        intensity*=.6+.4*sqrt(abs(d.y));
         return color*intensity;
       }
       void main(){

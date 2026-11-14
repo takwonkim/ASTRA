@@ -94,6 +94,13 @@
       "sha256": "ff0f076ba65e03b5ab518451bc96699325be38e3ccbdd5869ee1c00f3a0c8816",
       "bytes": 822427,
       "changes": "Unmodified image; rendered in enhanced colors for solar structure visualization."
+    },
+    {
+      "file": "2k_earth_nightmap.jpg",
+      "url": "https://play.solarsystemscope.com/textures/download/2k_earth_nightmap.jpg",
+      "sha256": "c16fd1bc096ab91a5c5265c6ff9847c43f489f2e2ee790ccdbcbd03251cf3a5a",
+      "bytes": 255287,
+      "changes": "Unmodified map. Rendered on the night side with cloud attenuation; brightness is illustrative, not current city lights."
     }
   ]
 }
