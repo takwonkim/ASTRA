@@ -11,6 +11,8 @@ import { createTapTracker } from './tap.js?v=4';
 import { solarMapFor } from './planet-maps.js?v=4';
 import { createPlanetVisual, STARLIGHT_INTENSITY } from './planet-visual.js?v=8';
 import { createOpticalRenderer } from './optical-renderer.js?v=8';
+import { createSurfaceMode } from './surface-mode.js?v=10';
+import { surfaceProfile } from './surface-world.js?v=10';
 
 const $ = (id) => document.getElementById(id);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -22,6 +24,7 @@ let labels = [], pickables = [], planetMeshes = [], starSurface, animation = nul
 let listItems = [], galaxyCatalog = galaxiesInSector(), lastFrame = 0, lastUI = 0, toastTimer, rebuilding = false;
 let preview = null, systemRoot = null, detailVisual = null, galaxyBlackHole = null, galaxyBackdrop = null;
 let interior = null;
+let surfaceMode = null;
 let focusTarget = null, scaleChanging = false, zoomUntil = 0, zoomDirection = 0, previousDistance = 0, zoomCooldown = 0;
 let viewEpoch = 0;
 let skyCatalog = null, skyMode = null, skyConfig = null, skySelection = null, lastSpaceHash = '', spacePaused = false, lastSkyFacts = 0, lastSkyList = 0;
@@ -158,6 +161,10 @@ function disposeWorld(root = world) {
 }
 
 function clearWorld() {
+  surfaceMode?.dispose();
+  surfaceMode = null;
+  document.body.classList.remove('surface-mode');
+  $('surface-hud').hidden = true;
   interior?.model.reset();
   interior = null;
   document.body.classList.remove('interior-mode');
@@ -619,6 +626,7 @@ function facts(items) {
 }
 
 function setObject({ name, code, kind, real, color, type, description, metrics, action, onTravel }) {
+  $('secondary-travel').hidden = true;
   $('object-name').textContent = name;
   $('object-code').textContent = code;
   $('object-kind').textContent = kind;
@@ -687,8 +695,11 @@ function selectCentralStar() {
   const star = state.star;
   setObject({ name: star.name, code: star.code, kind: `${star.type}형 · ${star.label}`, real: star.real, color: star.color, type: 'star',
     metrics: [['표면 온도', `${decimal.format(star.temperature)} K`], ['행성', `${state.planets.length}개`], ['항성 질량', `${star.mass} 태양질량`], ['모형', '케플러 공전']],
-    description: '행성을 선택하거나 별을 계속 확대해 내부를 둘러보세요. 내부 탐사에서는 핵융합 중심과 에너지 전달 층을 볼 수 있습니다.',
-    action: '별 내부 탐사', onTravel: () => startInterior() });
+    description: '표면 가까이 내려가 빛나는 플라스마와 홍염 사이를 비행해 보세요. 내부 구조는 별도의 단면 버튼으로 볼 수 있습니다.',
+    action: '표면으로 비행', onTravel: () => enterSurface() });
+  $('secondary-travel').hidden = false;
+  $('secondary-travel').textContent = '내부 단면 보기';
+  $('secondary-travel').onclick = () => startInterior();
   updateRoute();
   controls.minDistance = detailVisual.userData.radius * 1.15;
   focusObject(starSurface);
@@ -773,7 +784,10 @@ function selectPlanet(planet, travel = false) {
   setObject({ name: planet.name, code: `${state.star.code} / ${String.fromCharCode(98 + planet.id).toUpperCase()}`, kind: planetKinds[planet.kind], real: planet.real, color: planet.color, type: 'planet',
     metrics: [['항성까지 거리', `${decimal.format(planet.au)} AU`], ['공전 주기', planet.period < 1000 ? `${readable(planet.period)}일` : `${readable(planet.period / 365.25)}년`], ['반지름', `${planet.radius} 지구반지름`], ['궤도 이심률', planet.eccentricity.toFixed(3)]],
     description: planet.real ? `관측 자료를 바탕으로 가공한 ${solarMapFor(planet).layer}입니다. 색 보정·빈 영역 보완이 포함되며 현재 모습 그대로의 사진은 아닙니다. 시작 위치와 위성 배치는 탐험용 표현입니다.` : '같은 주소에서 다시 만날 수 있는 행성. 표면과 위성은 이 세계를 위한 상상입니다.',
-    action: planet.real && planet.id === 2 ? '지구에서 하늘 보기' : '가까이 관찰하기', onTravel: () => planet.real && planet.id === 2 ? openEarthSky() : approachPlanet(planet) });
+    action: surfaceProfile(planet, state.star).kind === 'gas' ? '구름 위로 비행' : '지표에 착륙', onTravel: () => enterSurface(planet) });
+  $('secondary-travel').hidden = false;
+  $('secondary-travel').textContent = planet.real && planet.id === 2 ? '지구에서 하늘 보기' : '궤도에서 관찰';
+  $('secondary-travel').onclick = () => planet.real && planet.id === 2 ? openEarthSky() : approachPlanet(planet);
   updateRoute();
   controls.minDistance = visualRadius(planet) * 1.12;
   focusObject(planetMeshes[planet.id]?.group, true);
@@ -793,6 +807,40 @@ function approachPlanet(planet) {
   moveCamera(destination.toArray(), target.toArray(), 1100);
   animation.followAfter = entry.group;
   toast(`${planet.name}의 공전을 따라갑니다`);
+}
+
+function enterSurface(planet = null) {
+  if (state.view !== 'system' || surfaceMode) return;
+  if (interior?.active) exitInterior(true);
+  interior?.model.reset();
+  animation = follow = previousFollow = focusTarget = null;
+  controls.enabled = false;
+  surfaceMode = createSurfaceMode({ planet, star: state.star, aspect: camera.aspect, input: $('scene-input'), buttons: $('surface-controls'), reduceMotion, blocked: () => $('help-dialog').open });
+  surfaceMode.planet = planet;
+  const profile = surfaceMode.profile;
+  $('surface-title').textContent = profile.name;
+  $('surface-kind').textContent = profile.label;
+  $('surface-note').textContent = profile.note;
+  $('surface-lower').textContent = profile.minimum < 3 ? '지표로 내려가기' : '낮은 고도로';
+  $('surface-hud').hidden = false;
+  $('labels').hidden = true;
+  document.body.classList.add('surface-mode');
+  closeDrawer();
+  updateRoute();
+}
+
+function exitSurface() {
+  if (!surfaceMode) return;
+  const planet = surfaceMode.planet;
+  surfaceMode.dispose();surfaceMode = null;
+  document.body.classList.remove('surface-mode');
+  $('surface-hud').hidden = true;
+  $('labels').hidden = false;
+  controls.enabled = true;
+  updateCelestialPositions();
+  if (planet) { selectPlanet(planet); approachPlanet(planet); }
+  else { selectCentralStar();moveCamera([20,76,104]); }
+  zoomUntil = 0;zoomCooldown = performance.now() + 1000;
 }
 
 function renderList() {
@@ -956,11 +1004,17 @@ function updateContinuousZoom(now) {
     else if (distance > previousDistance * 1.001) { zoomDirection = -1; zoomUntil = now + 700; }
     if (now < zoomUntil) {
       let next;
-      if (state.view === 'system' && (interior?.active || state.selected?.type === 'star')) {
-        const boundary = stellarZoomBoundary(!!interior?.active, camera.position.length() / detailVisual.userData.radius, zoomDirection, camera.aspect);
-        if (boundary) { boundary === 'inside' ? startInterior(true) : exitInterior(true); previousDistance = distance; return; }
+      if (state.view === 'system') {
+        if (interior?.active) {
+          if (stellarZoomBoundary(true, camera.position.length() / detailVisual.userData.radius, zoomDirection, camera.aspect)) exitInterior(true);
+          previousDistance = distance; return;
+        }
+        if (zoomDirection > 0 && state.selected?.type === 'star' && camera.position.length() < detailVisual.userData.radius * 3.1) { enterSurface();return; }
+        if (zoomDirection > 0 && state.selected?.type === 'planet') {
+          const planet = state.planets[state.selected.key], center = planetMeshes[planet.id].group.getWorldPosition(new THREE.Vector3());
+          if (camera.position.distanceTo(center) < visualRadius(planet) * 2.2) { enterSurface(planet);return; }
+        }
       }
-      if (interior?.active) { previousDistance = distance; return; }
       if (state.view === 'cluster') {
         const target = clusterGroups.get(state.galaxy.id);
         next = zoomBoundary('cluster', camera.position.distanceTo(target.position), zoomDirection, state.galaxy.size);
@@ -987,6 +1041,7 @@ function updateRoute(replace = true) {
   }
   if (state.view === 'system' && state.selected?.type === 'planet') params.set('planet', state.selected.key);
   if (interior?.active) { params.set('inside', '1'); params.set('layer', state.selected.key); }
+  if (surfaceMode) params.set('surface', '1');
   const next = `#${params}`;
   if (location.hash !== next) history[replace ? 'replaceState' : 'pushState'](null, '', next);
 }
@@ -1012,7 +1067,12 @@ function parseRoute() {
   }
   const selectedPlanet = params.has('planet') ? Number(params.get('planet')) : -1;
   navigate(view, true);
-  if (view === 'system' && params.get('inside') === '1') startInterior(false, params.get('layer') || 'core');
+  if (view === 'system' && params.get('surface') === '1') {
+    const planet = Number.isInteger(selectedPlanet) ? state.planets[selectedPlanet] : null;
+    if (planet) selectPlanet(planet);
+    enterSurface(planet || null);
+  }
+  else if (view === 'system' && params.get('inside') === '1') startInterior(false, params.get('layer') || 'core');
   else if (view === 'system' && Number.isInteger(selectedPlanet) && state.planets[selectedPlanet]) selectPlanet(state.planets[selectedPlanet]);
 }
 
@@ -1044,7 +1104,7 @@ function updateTimeUI() {
     $('zoom-destination').textContent = '확대 → 별의 중심';
     $('zoom-return').textContent = '축소 → 별 밖으로';
     $('scale-level').textContent = '항성 내부 · 설명용 단면';
-  } else if (state.view === 'system' && state.selected?.type === 'star') $('zoom-destination').textContent = '확대 → 별 내부';
+  } else if (state.view === 'system') $('zoom-destination').textContent = state.selected?.type === 'star' ? '확대 → 항성 표면 비행' : '확대 → 착륙 · 저공비행';
 }
 
 function updateGalaxyAppearance() {
@@ -1099,6 +1159,19 @@ function animate(now) {
   requestAnimationFrame(animate);
   const dt = Math.min((now - (lastFrame || now)) / 1000, 0.06);
   lastFrame = now;
+  if (surfaceMode) {
+    if (!state.paused && !document.hidden) state.years += dt * speeds.system[state.speed] * state.direction;
+    const motion = state.paused || document.hidden || reduceMotion ? 0 : dt * state.direction * 2 ** ((state.speed - 3) / 2);
+    const at = surfaceMode.step(dt, motion);
+    opticalRenderer.render(surfaceMode.scene, surfaceMode.camera);
+    if (now - lastUI > 100) {
+      const status = !at.arrived ? '하강 중' : at.grounded ? '착륙 완료 · 지표 이동' : '표면 가까이 비행 중';
+      if ($('surface-status').textContent !== status) $('surface-status').textContent = status;
+      $('surface-altitude').textContent = `${decimal.format(Math.round(at.altitude * 10) / 10)} m`;
+      lastUI = now;
+    }
+    return;
+  }
   if (state.view === 'sky' && skyMode) {
     skyMode.step(dt, state.paused || document.hidden, state.direction, state.speed);
     renderer.render(scene, camera);
@@ -1161,7 +1234,8 @@ function animate(now) {
 
 function closeDrawer() { $('destinations').classList.remove('open'); $('drawer-button').setAttribute('aria-expanded', 'false'); $('drawer-backdrop').hidden = true; }
 function goUp() {
-  if (interior?.active) exitInterior();
+  if (surfaceMode) exitSurface();
+  else if (interior?.active) exitInterior();
   else if (state.view === 'sky') { if (lastSpaceHash) location.hash = lastSpaceHash; else navigate('cluster'); }
   else if (state.view === 'system' || state.view === 'blackhole') navigate('galaxy');
   else if (state.view === 'galaxy') navigate('cluster');
@@ -1173,6 +1247,8 @@ function bindEvents() {
   let labelPointer = null;
   document.querySelectorAll('[data-view]').forEach((button) => button.onclick = () => interior?.active && button.dataset.view === 'system' ? exitInterior() : navigate(button.dataset.view === 'system' && state.selected?.type === 'blackhole' ? 'blackhole' : button.dataset.view));
   $('interior-exit').onclick = () => exitInterior();
+  $('surface-exit').onclick = exitSurface;
+  $('surface-lower').onclick = () => surfaceMode?.lower();
   $('interior-overview').onclick = () => moveCamera(camera.position.clone().normalize().multiplyScalar(detailVisual.userData.radius * 3.8 * Math.max(1, 1 / camera.aspect)).toArray());
   $('search').oninput = renderList;
   $('up-button').onclick = goUp;
@@ -1253,6 +1329,7 @@ function bindEvents() {
   }
   addEventListener('keydown', (event) => {
     if ($('help-dialog').open) return;
+    if (surfaceMode && event.code === 'Escape') { exitSurface();return; }
     if (event.code === 'Escape' && $('destinations').classList.contains('open')) { closeDrawer(); return; }
     if (event.code === 'Escape' && interior?.active) { exitInterior(); return; }
     if (event.target.matches('input,button,select,textarea')) return;
@@ -1261,6 +1338,7 @@ function bindEvents() {
   });
   addEventListener('hashchange', parseRoute);
   input.addEventListener('wheel', (event) => {
+    if (surfaceMode) return;
     const now = performance.now();
     zoomDirection = event.deltaY < 0 ? 1 : -1;
     zoomUntil = now + 700;
@@ -1273,7 +1351,7 @@ function bindEvents() {
     const tap = tapTracker.finish(event);
     const label = labelPointer;
     labelPointer = null;
-    if (skyMode || !tap || animation || event.button !== 0) return;
+    if (surfaceMode || skyMode || !tap || animation || event.button !== 0) return;
     if (label) { label.click(); return; }
     const rect = renderer.domElement.getBoundingClientRect();
     pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
@@ -1286,7 +1364,7 @@ function bindEvents() {
     else hit.object.userData.select?.(hit);
   });
   renderer.domElement.addEventListener('webglcontextlost', (event) => { event.preventDefault(); showError('그래픽 연결이 중단되었습니다. 화면을 다시 열어 주세요.'); });
-  const resize = () => { const width = $('app').clientWidth, height = $('app').clientHeight; camera.aspect = width / height; camera.updateProjectionMatrix(); renderer.setSize(width, height); };
+  const resize = () => { const width = $('app').clientWidth, height = $('app').clientHeight; camera.aspect = width / height; camera.updateProjectionMatrix(); surfaceMode?.resize(width / height); renderer.setSize(width, height); };
   addEventListener('resize', resize);
   new ResizeObserver(resize).observe($('app'));
 }
