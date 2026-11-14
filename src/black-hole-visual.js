@@ -49,6 +49,7 @@ export function createBlackHoleVisual(backgroundMap = null) {
         float turbulence=.4+1.5*smoothstep(.15,.9,broad*.8+fine*.2);
         float threads=.9+.1*sin(r*9.+warp*4.+noise3(flow*.9)*12.);
         float flux=pow(${BH.inner.toFixed(1)}/r,3.)*(1.-sqrt(${BH.inner.toFixed(1)}/r))/.057;
+        flux+=.11*pow(6./r,2.)*smoothstep(5.,8.,r);
         float heat=pow(max(flux,0.),.25)*shift;
         vec3 color=mix(vec3(.48,.055,.009),vec3(1.,.46,.16),smoothstep(.2,.8,heat));
         color=mix(color,vec3(1.,.91,.78),smoothstep(.72,1.3,heat));

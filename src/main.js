@@ -1,14 +1,14 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STAR_COUNT, TAU, hash, random, galaxiesInSector, starAt, makeSystem, orbitPosition, visualOrbit, visualRadius, planetKinds, blackHoleIn } from './universe.js?v=3';
-import { createStarVisual, createBlackHoleVisual, createBlackHoleBackground, updateObjectVisual } from './objects.js?v=7';
+import { createStarVisual, createBlackHoleVisual, createBlackHoleBackground, updateObjectVisual } from './objects.js?v=8';
 import { DETAIL_SCALE, remapCamera, zoomBoundary } from './navigation.js?v=3';
 import { loadSkyCatalog, createSkyMode } from './sky.js?v=3';
 import { OBSERVERS, SKY_RATES, tonight, localDateInput, dateFromLocal } from './sky-math.js?v=3';
 import { createTapTracker } from './tap.js?v=4';
 import { solarMapFor } from './planet-maps.js?v=4';
-import { createPlanetVisual, STARLIGHT_INTENSITY } from './planet-visual.js?v=7';
-import { createOpticalRenderer } from './optical-renderer.js?v=7';
+import { createPlanetVisual, STARLIGHT_INTENSITY } from './planet-visual.js?v=8';
+import { createOpticalRenderer } from './optical-renderer.js?v=8';
 
 const $ = (id) => document.getElementById(id);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;

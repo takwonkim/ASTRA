@@ -2,13 +2,13 @@
 <html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ASTRA 블랙홀 검수</title>
 <style>*{box-sizing:border-box}body{margin:0;color:#ddd;background:#02040a;font:13px system-ui}header{height:52px;padding:16px 24px;display:flex;justify-content:space-between}a{color:#d9c199}.grid{position:absolute;inset:52px 0 0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}.view{position:relative;border:1px solid #1b2736;touch-action:none}.view h2{position:absolute;left:24px;top:12px;font-size:17px;font-weight:400;pointer-events:none}.view p{position:absolute;left:24px;bottom:10px;color:#7d93ad;font-size:11px;pointer-events:none}canvas{position:fixed;inset:0;pointer-events:none}#status{font-size:11px;color:#8dbaab}</style>
 <script type="importmap">{"imports":{"three":"../vendor/three.module.min.js","three/addons/controls/OrbitControls.js":"../vendor/OrbitControls.js"}}</script>
-<header><span>ASTRA · 블랙홀 검수 <span id="status">렌더링 준비 중</span></span><a href="../index.html?v=7#view=blackhole">탐사 화면 열기 ↗</a></header>
+<header><span>ASTRA · 블랙홀 검수 <span id="status">렌더링 준비 중</span></span><a href="../index.html?v=8#view=blackhole">탐사 화면 열기 ↗</a></header>
 <div class="grid"><section class="view"><h2>위에서</h2><p>좌우 밝기 대칭 / 드래그로 시점 변경</p></section><section class="view"><h2>비스듬히</h2><p>뒤쪽 원반의 위·아래 영상</p></section><section class="view"><h2>원반 옆에서</h2><p>휘어 보이는 원반 · 접근/후퇴 쪽 밝기</p></section><section class="view"><h2>아래에서</h2><p>위아래 영상 대칭 · 가까운 거리</p></section></div>
 <script type="module">
 import * as THREE from 'three';
-import { createOpticalRenderer } from '../src/optical-renderer.js?v=7';
+import { createOpticalRenderer } from '../src/optical-renderer.js?v=8';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { createBlackHoleVisual, createBlackHoleBackground, updateObjectVisual } from '../src/objects.js?v=7';
+import { createBlackHoleVisual, createBlackHoleBackground, updateObjectVisual } from '../src/objects.js?v=8';
 import { random } from '../src/universe.js';
 const status=document.getElementById('status');let errors=0,frames=0,last=0;
 const originalError=console.error;console.error=(...args)=>{errors++;status.textContent=`오류 ${errors}개`;originalError(...args)};

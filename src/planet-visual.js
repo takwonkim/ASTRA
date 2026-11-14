@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export const STARLIGHT_INTENSITY = 3.4;
+export const STARLIGHT_INTENSITY = 4.2;
 
 function loadMap(file, anisotropy, color = false) {
   const texture = new THREE.TextureLoader().load(new URL(`../data/planets/${file}`, import.meta.url).href);
@@ -10,12 +10,12 @@ function loadMap(file, anisotropy, color = false) {
 }
 
 function atmosphere(radius, color, light, polarRatio, opacity) {
-  const sunPosition = { value: new THREE.Vector3() }, eye = { value: new THREE.Vector3() };
+  const sunPosition = { value: new THREE.Vector3() }, eye = { value: new THREE.Vector3() }, sunlight = { value: new THREE.Color() };
   const shell = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.05, 64, 40), new THREE.ShaderMaterial({
-    uniforms: { tint: { value: new THREE.Color(color) }, sunPosition, eye, opacity: { value: opacity } },
+    uniforms: { tint: { value: new THREE.Color(color) }, sunPosition, eye, sunlight, opacity: { value: opacity } },
     transparent: true, depthWrite: false,
     vertexShader: `varying vec3 p;void main(){p=position/${radius.toFixed(6)};gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-    fragmentShader: `uniform vec3 tint;uniform vec3 sunPosition;uniform vec3 eye;uniform float opacity;varying vec3 p;
+    fragmentShader: `uniform vec3 tint;uniform vec3 sunPosition;uniform vec3 eye;uniform vec3 sunlight;uniform float opacity;varying vec3 p;
       void main(){float visible=1.-smoothstep(80.,150.,length(eye));if(visible<.001)discard;
         vec3 d=normalize(p-eye);float b=dot(eye,d),c=dot(eye,eye),outer=b*b-c+1.1025;
         if(outer<0.)discard;float start=max(0.,-b-sqrt(outer)),end=-b+sqrt(outer),ground=b*b-c+1.;
@@ -28,7 +28,7 @@ function atmosphere(radius, color, light, polarRatio, opacity) {
           depth+=density*step;scattering+=density*step*lit*transmission;}
         vec3 sun=normalize(sunPosition-p);float mu=dot(sun,-d),phase=.75*(1.+mu*mu)+.25*pow(max(mu,0.),12.);
         float alpha=(1.-exp(-depth*24.*opacity))*visible;float lit=scattering/max(depth,1.e-6);
-        gl_FragColor=vec4(tint*phase*lit*1.6,alpha);
+        gl_FragColor=vec4(tint*sunlight*phase*lit*1.6,alpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`
@@ -39,6 +39,7 @@ function atmosphere(radius, color, light, polarRatio, opacity) {
     shell.worldToLocal(light.getWorldPosition(sunPosition.value));
     shell.worldToLocal(camera.getWorldPosition(eye.value));
     sunPosition.value.divideScalar(radius); eye.value.divideScalar(radius);
+    sunlight.value.copy(light.color).multiplyScalar(light.intensity / Math.PI);
   };
   return shell;
 }

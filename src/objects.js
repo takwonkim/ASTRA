@@ -62,12 +62,20 @@ export function createStarVisual(star, glow) {
       }`
   }));
   root.add(corona);
-  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: haloColor, transparent: true, opacity: .18, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
-  halo.scale.set(22, 22, 1);
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: haloColor, transparent: true, opacity: .3, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+  halo.scale.set(34, 34, 1);
   root.add(halo);
-  const outer = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: haloColor, transparent: true, opacity: .025, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
-  outer.scale.set(48, 48, 1);
+  const outer = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: haloColor, transparent: true, opacity: .055, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+  outer.scale.set(80, 80, 1);
   root.add(outer);
+  for (const layer of [halo, outer]) {
+    layer.material.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `
+        float radius=length(vMapUv*2.-1.);
+        diffuseColor.a*=exp(-10.*radius*radius)*(1.-smoothstep(.75,1.,radius));`);
+    };
+    layer.material.customProgramCacheKey = () => 'astra-smooth-halo';
+  }
   for (let i = 0; i < 7; i++) {
     const points = Array.from({ length: 25 }, (_, j) => {
       const t = j / 24 * Math.PI;
@@ -83,7 +91,7 @@ export function createStarVisual(star, glow) {
   return root;
 }
 
-export { createBlackHoleVisual, createBlackHoleBackground } from './black-hole-visual.js?v=7';
+export { createBlackHoleVisual, createBlackHoleBackground } from './black-hole-visual.js?v=8';
 
 export function updateObjectVisual(root, days) {
   root.userData.time.value = (days % 1000) * 0.04;
