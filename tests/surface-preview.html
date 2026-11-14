@@ -2,11 +2,11 @@
 <html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ASTRA 착륙·비행 검수</title>
 <style>*{box-sizing:border-box}body{margin:0;color:#eee;background:#04070d;font:13px system-ui}header{height:52px;padding:16px 24px;display:flex;justify-content:space-between}a{color:#d9c199}.grid{position:absolute;inset:52px 0 0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}.view{position:relative;border:1px solid #233047;touch-action:none}.view h2{position:absolute;left:24px;top:12px;font-size:17px;font-weight:400;pointer-events:none;text-shadow:0 2px 8px #000}.view p{position:absolute;left:24px;bottom:10px;color:#ddd;font-size:11px;pointer-events:none;text-shadow:0 2px 8px #000}canvas{position:fixed;inset:0;pointer-events:none}#status{font-size:11px;color:#9bcfbd}</style>
 <script type="importmap">{"imports":{"three":"../vendor/three.module.min.js","three/addons/controls/OrbitControls.js":"../vendor/OrbitControls.js"}}</script>
-<header><span>ASTRA · 착륙·비행 검수 <span id="status">로딩 중</span></span><a href="../?v=10#view=system&planet=3&surface=1">탐사 화면 열기 ↗</a></header>
+<header><span>ASTRA · 착륙·비행 검수 <span id="status">로딩 중</span></span><a href="../?v=11#view=system&planet=3&surface=1">탐사 화면 열기 ↗</a></header>
 <div class="grid"><section class="view"></section><section class="view"></section><section class="view"></section><section class="view"></section></div>
 <script type="module">
 import * as THREE from 'three';
-import { createSurfaceMode } from '../src/surface-mode.js?v=10';
+import { createSurfaceMode } from '../src/surface-mode.js?v=11';
 import { createOpticalRenderer } from '../src/optical-renderer.js?v=8';
 import { galaxiesInSector, starAt, makeSystem } from '../src/universe.js?v=3';
 const status=document.getElementById('status');let errors=0;const originalError=console.error;
@@ -21,12 +21,21 @@ if(probe.position.z>=0)console.error('앞으로 이동하지 않음');
 document.body.dispatchEvent(new KeyboardEvent('keyup',{code:'KeyW',bubbles:true}));probe.dispose();const stopped=probe.position.z;
 document.body.dispatchEvent(new KeyboardEvent('keydown',{code:'KeyW',bubbles:true}));probe.step(.2,0);
 if(probe.position.z!==stopped)console.error('복귀 후 입력 리스너가 남음');
+// 색 무늬만 바뀌는 경우와 구분해 실제 정점 높이의 시간 변화를 렌더링한다.
+const boiling=createSurfaceMode({...options,planet:null}),target=new THREE.WebGLRenderTarget(64,64);
+let surface;boiling.scene.traverse(object=>{if(object.material?.uniforms?.kind?.value===6)surface=object});
+surface.material.fragmentShader='varying vec3 point;void main(){gl_FragColor=vec4(vec3(clamp(.3+point.y*.015,0.,1.)),1.);}';surface.material.needsUpdate=true;
+function heightPixels(motion){boiling.step(0,motion);boiling.scene.traverse(object=>{if(object.isMesh&&object!==surface)object.visible=false});renderer.setRenderTarget(target);renderer.setScissorTest(false);renderer.render(boiling.scene,boiling.camera);const pixels=new Uint8Array(64*64*4);renderer.readRenderTargetPixels(target,0,0,64,64,pixels);return pixels}
+const before=heightPixels(0),after=heightPixels(1.8);let heightChanges=0;
+for(let i=0;i<before.length;i+=4)if(Math.abs(before[i]-after[i])>2)heightChanges++;
+if(heightChanges<128)console.error('태양 정점 높이의 시간 변화가 부족함');
+boiling.dispose();target.dispose();renderer.setRenderTarget(null);renderer.setScissorTest(true);
 document.querySelectorAll('.view').forEach((element,i)=>{const mode=createSurfaceMode({...options,input:element,planet:[planets[3],null,planets[2],planets[4]][i]});
  const heading=document.createElement('h2');heading.textContent=`${mode.profile.name} · ${mode.profile.label}`;
  const note=document.createElement('p');note.textContent=mode.profile.note;element.append(heading,note);views.push({element,mode});});
 let last=0,frames=0,report=0;
 function frame(now){requestAnimationFrame(frame);const dt=Math.min(.06,(now-(last||now))/1000);last=now;
  for(const {element,mode}of views){const r=element.getBoundingClientRect();mode.resize(r.width/r.height);mode.step(dt,dt);renderer.setViewport(r.left,innerHeight-r.bottom,r.width,r.height);renderer.setScissor(r.left,innerHeight-r.bottom,r.width,r.height);optical.render(mode.scene,mode.camera);}
- frames++;if(now-report>1000){status.textContent=`렌더링·입력·복귀 오류 ${errors}개 · ${Math.round(frames*1000/(now-report))}fps`;frames=0;report=now;}}
+ frames++;if(now-report>1000){status.textContent=`렌더링·입력·복귀 오류 ${errors}개 · 높이 변화 ${heightChanges}/4096 · ${Math.round(frames*1000/(now-report))}fps`;frames=0;report=now;}}
 requestAnimationFrame(frame);addEventListener('resize',()=>renderer.setSize(innerWidth,innerHeight));
 </script></html>

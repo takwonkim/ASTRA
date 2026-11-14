@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STAR_COUNT, TAU, hash, random, galaxiesInSector, starAt, makeSystem, orbitPosition, visualOrbit, visualRadius, planetKinds, blackHoleIn } from './universe.js?v=3';
-import { createStarVisual, createBlackHoleVisual, createBlackHoleBackground, updateObjectVisual } from './objects.js?v=9';
+import { createStarVisual, createBlackHoleVisual, createBlackHoleBackground, updateObjectVisual } from './objects.js?v=11';
 import { attachStarInterior } from './star-interior.js?v=9';
 import { layerAtRadius, stellarZoomBoundary } from './star-model.js?v=9';
 import { DETAIL_SCALE, remapCamera, zoomBoundary } from './navigation.js?v=3';
@@ -11,8 +11,9 @@ import { createTapTracker } from './tap.js?v=4';
 import { solarMapFor } from './planet-maps.js?v=4';
 import { createPlanetVisual, STARLIGHT_INTENSITY } from './planet-visual.js?v=8';
 import { createOpticalRenderer } from './optical-renderer.js?v=8';
-import { createSurfaceMode } from './surface-mode.js?v=10';
-import { surfaceProfile } from './surface-world.js?v=10';
+import { createSurfaceMode } from './surface-mode.js?v=11';
+import { surfaceProfile } from './surface-world.js?v=11';
+import { createSurfaceBridge } from './surface-navigation.js?v=11';
 
 const $ = (id) => document.getElementById(id);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -25,6 +26,7 @@ let listItems = [], galaxyCatalog = galaxiesInSector(), lastFrame = 0, lastUI = 
 let preview = null, systemRoot = null, detailVisual = null, galaxyBlackHole = null, galaxyBackdrop = null;
 let interior = null;
 let surfaceMode = null;
+let surfaceBridge = null;
 let focusTarget = null, scaleChanging = false, zoomUntil = 0, zoomDirection = 0, previousDistance = 0, zoomCooldown = 0;
 let viewEpoch = 0;
 let skyCatalog = null, skyMode = null, skyConfig = null, skySelection = null, lastSpaceHash = '', spacePaused = false, lastSkyFacts = 0, lastSkyList = 0;
@@ -161,6 +163,7 @@ function disposeWorld(root = world) {
 }
 
 function clearWorld() {
+  surfaceBridge?.restore();surfaceBridge = null;
   surfaceMode?.dispose();
   surfaceMode = null;
   document.body.classList.remove('surface-mode');
@@ -817,6 +820,9 @@ function enterSurface(planet = null) {
   controls.enabled = false;
   surfaceMode = createSurfaceMode({ planet, star: state.star, aspect: camera.aspect, input: $('scene-input'), buttons: $('surface-controls'), reduceMotion, blocked: () => $('help-dialog').open });
   surfaceMode.planet = planet;
+  const entry = planet ? planetMeshes[planet.id] : null;
+  surfaceBridge = createSurfaceBridge({ world, background, target: entry?.mesh || starSurface, body: entry?.group || detailVisual, radius: planet ? visualRadius(planet) : detailVisual.userData.radius, camera, destination: surfaceMode.scene });
+  surfaceBridge.enter(surfaceMode.camera);surfaceMode.connectSpace();
   const profile = surfaceMode.profile;
   $('surface-title').textContent = profile.name;
   $('surface-kind').textContent = profile.label;
@@ -831,15 +837,25 @@ function enterSurface(planet = null) {
 
 function exitSurface() {
   if (!surfaceMode) return;
+  surfaceMode.ascend();
+}
+
+function finishSurfaceFlight() {
   const planet = surfaceMode.planet;
+  surfaceBridge.leave(surfaceMode.camera);surfaceBridge.restore();surfaceBridge = null;
   surfaceMode.dispose();surfaceMode = null;
   document.body.classList.remove('surface-mode');
   $('surface-hud').hidden = true;
   $('labels').hidden = false;
   controls.enabled = true;
   updateCelestialPositions();
-  if (planet) { selectPlanet(planet); approachPlanet(planet); }
-  else { selectCentralStar();moveCamera([20,76,104]); }
+  if (planet) {
+    selectPlanet(planet);follow = planetMeshes[planet.id].group;
+    previousFollow = follow.getWorldPosition(new THREE.Vector3());controls.target.copy(previousFollow);
+  } else { selectCentralStar();controls.target.set(0,0,0); }
+  focusTarget = null;animation = null;controls.update();
+  previousDistance = camera.position.distanceTo(controls.target);
+  updateTimeUI();
   zoomUntil = 0;zoomCooldown = performance.now() + 1000;
 }
 
@@ -1161,13 +1177,18 @@ function animate(now) {
   lastFrame = now;
   if (surfaceMode) {
     if (!state.paused && !document.hidden) state.years += dt * speeds.system[state.speed] * state.direction;
+    updateCelestialPositions();
     const motion = state.paused || document.hidden || reduceMotion ? 0 : dt * state.direction * 2 ** ((state.speed - 3) / 2);
     const at = surfaceMode.step(dt, motion);
+    surfaceBridge.update(surfaceMode.camera, at.altitude, surfaceMode.profile.kind === 'star');
+    if (at.orbitReady) {
+      finishSurfaceFlight();opticalRenderer.render(scene,camera);projectLabels();return;
+    }
     opticalRenderer.render(surfaceMode.scene, surfaceMode.camera);
     if (now - lastUI > 100) {
-      const status = !at.arrived ? '하강 중' : at.grounded ? '착륙 완료 · 지표 이동' : '표면 가까이 비행 중';
+      const status = at.departing ? '우주로 상승 중' : !at.arrived ? '표면으로 하강 중' : at.grounded ? '착륙 완료 · 지표 이동' : '표면 가까이 비행 중';
       if ($('surface-status').textContent !== status) $('surface-status').textContent = status;
-      $('surface-altitude').textContent = `${decimal.format(Math.round(at.altitude * 10) / 10)} m`;
+      $('surface-altitude').textContent = at.altitude >= 10000 ? `${decimal.format(Math.round(at.altitude / 1000))} km` : `${decimal.format(Math.round(at.altitude * 10) / 10)} m`;
       lastUI = now;
     }
     return;

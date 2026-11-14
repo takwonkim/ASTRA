@@ -30,7 +30,7 @@ test('지표 및 플라스마·구름 아래로 내려가지 않도록 고도를
   for (const planet of [null,...planets]) {
     const profile=surfaceProfile(planet,star);
     assert.equal(surfaceAltitude(profile,-100),profile.minimum);
-    assert.equal(surfaceAltitude(profile,1e6),3500);
+    assert.equal(surfaceAltitude(profile,1e9),1e8);
     const position={x:0,z:0,altitude:profile.minimum,yaw:0};
     moveOnSurface(position,profile,1,0,-1,1);
     assert.equal(position.altitude,profile.minimum);

@@ -15,7 +15,7 @@ export function surfaceProfile(planet, star) {
   const profile = { kind, seed: hash(`${planet?.seed || star.seed}/surface`), name: planet?.name || star.name,
     ground: colors[0], dark: colors[1], sky: airless ? '#060810' : colors[2], airless,
     label: stellar ? '항성 표면 비행' : giant ? '구름 위 비행' : '지표 착륙',
-    minimum: stellar ? 24 : giant ? 35 : 2.2, arrival: stellar ? 60 : giant ? 90 : 2.2,
+    minimum: stellar ? 34 : giant ? 35 : 2.2, arrival: stellar ? 60 : giant ? 90 : 2.2,
     speed: stellar ? 150 : giant ? 100 : 12, haze: stellar ? .00045 : airless ? .00005 : venus ? .0012 : .00024,
     clouds: airless || stellar ? 0 : venus ? .7 : kind === 'ocean' || giant ? .45 : .06,
     note: stellar ? '플라스마 표면 재구성 · 가상 비행' : giant ? '고체 지표 없는 대기 · 가상 비행' : '지표 재구성 · 가상 착륙지' };
@@ -71,7 +71,7 @@ export function terrainHeight(profile, x, z) {
 }
 
 export function surfaceAltitude(profile, altitude) {
-  return Math.max(profile.minimum, Math.min(3500, altitude));
+  return Math.max(profile.minimum, Math.min(1e8, altitude));
 }
 
 export function moveOnSurface(position, profile, forward, sideways, lift, dt) {

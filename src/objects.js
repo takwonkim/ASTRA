@@ -21,6 +21,7 @@ export function createStarVisual(star, glow) {
   root.scale.setScalar(size);
   root.userData.radius = 3.5 * size;
   const time = { value: 0 };
+  const nearVisibility = { value: 1 };
   const cutaway = { opening: { value: 0 }, cutDirection: { value: new THREE.Vector3(1, 0, 0) } };
   const isSun = star.real && star.seed === 'sol';
   const haloColor = isSun ? '#ffbf75' : star.color;
@@ -51,14 +52,14 @@ export function createStarVisual(star, glow) {
   }));
   root.add(surface);
   const corona = new THREE.Mesh(new THREE.SphereGeometry(6.1, 48, 32), new THREE.ShaderMaterial({
-    uniforms: { tint: { value: new THREE.Color(haloColor) }, time, opening: cutaway.opening }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.BackSide,
+    uniforms: { tint: { value: new THREE.Color(haloColor) }, time, opening: cutaway.opening, nearVisibility }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.BackSide,
     vertexShader: 'varying vec3 n;varying vec3 eye;varying vec3 p;void main(){p=position;n=normalize(normalMatrix*normal);vec4 mv=modelViewMatrix*vec4(position,1.);eye=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}',
-    fragmentShader: `${noise} uniform vec3 tint;uniform float time;uniform float opening;varying vec3 n;varying vec3 eye;varying vec3 p;
+    fragmentShader: `${noise} uniform vec3 tint;uniform float time;uniform float opening;uniform float nearVisibility;varying vec3 n;varying vec3 eye;varying vec3 p;
       void main(){float mu=abs(dot(normalize(n),normalize(eye)));float r=sqrt(max(0.,1.-mu*mu))*6.1/3.5;
         vec3 direction=normalize(p);float plumes=pow(fbm(direction*18.+vec3(time*.025,0.,0.)),2.);
         float edge=smoothstep(.97,1.025,r)*exp(-max(0.,r-1.)*14.)*(1.-smoothstep(1.3,1.5,r));
         if(edge<.05)discard;
-        gl_FragColor=vec4(mix(tint,vec3(1.),.4)*2.2,edge*(.02+plumes*.35)*.35*(1.-opening));
+        gl_FragColor=vec4(mix(tint,vec3(1.),.4)*2.2,edge*(.02+plumes*.35)*.35*(1.-opening)*nearVisibility);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`
@@ -91,6 +92,7 @@ export function createStarVisual(star, glow) {
   root.userData.surface = surface;
   root.userData.time = time;
   root.userData.cutaway = cutaway;
+  root.userData.nearVisibility = nearVisibility;
   return root;
 }
 
